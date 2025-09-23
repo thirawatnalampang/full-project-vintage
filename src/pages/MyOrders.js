@@ -268,7 +268,7 @@ function CancelModal({ open, order, onClose, onConfirm }) {
 
   if (!open) return null;
 
-  const min = 5, max = 300;
+  const min = 1, max = 300;
   const valid = reason.trim().length >= min && reason.trim().length <= max;
 
   const submit = async () => {
@@ -507,8 +507,9 @@ export default function MyOrdersPage() {
       </div>
 
       {/* Filters */}
-      <div className="w-full overflow-x-auto">
-        <div className="inline-flex rounded-full border bg-white p-1 shadow-sm sticky top-2">
+      {/* Filters (mobile scrollable) */}
+<div className="-mx-4 px-4 w-full overflow-x-auto">
+  <div className="inline-flex whitespace-nowrap rounded-full border bg-white p-1 shadow-sm">
           {FILTERS.map(({ key, label }) => (
             <button
               key={key}
@@ -569,59 +570,75 @@ export default function MyOrdersPage() {
                       <div className="text-xs text-neutral-500 mt-0.5">
                         {new Date(o.order_date).toLocaleString("th-TH")} • {o.total_items} ชิ้น
                       </div>
+{/* ผู้รับ & ที่อยู่จัดส่ง */}
+<div className="mt-3 rounded-xl border border-dashed bg-neutral-50/60 p-3">
+  <div className="grid gap-3 w-full md:grid-cols-3 md:items-start">
 
-                      {/* ผู้รับ & ที่อยู่จัดส่ง */}
-                      <div className="mt-3 rounded-xl border border-dashed bg-neutral-50/60 p-3">
-                        <div className="grid gap-3 md:grid-cols-3 md:items-start">
-                          {/* ชื่อ */}
-                          <div className="flex items-start gap-2 min-w-0">
-                            <div className="w-7 h-7 mt-0.5 rounded-full bg-white border grid place-items-center">
-                              <FiUser className="text-neutral-600" />
-                            </div>
-                            <div className="min-w-0">
-                              <div className="text-xs text-neutral-500">ผู้รับ</div>
-                              <StopBubble>
-                                <div className="text-sm font-medium text-neutral-900 break-words whitespace-pre-wrap">
-                                  {ship.name || "—"}
-                                </div>
-                              </StopBubble>
-                            </div>
-                            {ship.name && <Copyable text={ship.name} className="ml-2">คัดลอกชื่อ</Copyable>}
-                          </div>
+    {/* ชื่อ */}
+    <div className="flex flex-wrap items-start gap-2 min-w-0 w-full">
+      <div className="w-7 h-7 mt-0.5 rounded-full bg-white border grid place-items-center">
+        <FiUser className="text-neutral-600" />
+      </div>
+      <div className="min-w-0 flex-1">
+        <div className="text-xs text-neutral-500">ผู้รับ</div>
+        <StopBubble>
+          <div className="text-sm font-medium text-neutral-900 whitespace-normal break-words"
+               style={{ wordBreak: 'break-word', overflowWrap: 'anywhere' }}>
+            {ship.name || "—"}
+          </div>
+        </StopBubble>
+      </div>
+      {ship.name && (
+        <div className="order-last basis-full sm:order-none sm:basis-auto mt-2 sm:mt-0">
+          <Copyable text={ship.name}>คัดลอก</Copyable>
+        </div>
+      )}
+    </div>
 
-                          {/* เบอร์ */}
-                          <div className="flex items-start gap-2 min-w-0">
-                            <div className="w-7 h-7 mt-0.5 rounded-full bg-white border grid place-items-center">
-                              <FiPhone className="text-neutral-600" />
-                            </div>
-                            <div className="min-w-0">
-                              <div className="text-xs text-neutral-500">เบอร์</div>
-                              <StopBubble>
-                                <div className="text-sm font-medium text-neutral-900 break-words whitespace-pre-wrap">
-                                  {ship.phone || "—"}
-                                </div>
-                              </StopBubble>
-                            </div>
-                            {ship.phone && <Copyable text={ship.phone} className="ml-2">คัดลอกเบอร์</Copyable>}
-                          </div>
+    {/* เบอร์ */}
+    <div className="flex flex-wrap items-start gap-2 min-w-0 w-full">
+      <div className="w-7 h-7 mt-0.5 rounded-full bg-white border grid place-items-center">
+        <FiPhone className="text-neutral-600" />
+      </div>
+      <div className="min-w-0 flex-1">
+        <div className="text-xs text-neutral-500">เบอร์</div>
+        <StopBubble>
+          <div className="text-sm font-medium text-neutral-900 whitespace-normal break-words"
+               style={{ wordBreak: 'break-word', overflowWrap: 'anywhere' }}>
+            {ship.phone || "—"}
+          </div>
+        </StopBubble>
+      </div>
+      {ship.phone && (
+        <div className="order-last basis-full sm:order-none sm:basis-auto mt-2 sm:mt-0">
+          <Copyable text={ship.phone}>คัดลอก</Copyable>
+        </div>
+      )}
+    </div>
 
-                          {/* ที่อยู่ (ทุกบรรทัด) */}
-                          <div className="flex items-start gap-2 md:col-span-1 min-w-0">
-                            <div className="w-7 h-7 mt-0.5 rounded-full bg-white border grid place-items-center">
-                              <FiMapPin className="text-neutral-600" />
-                            </div>
-                            <div className="min-w-0">
-                              <div className="text-xs text-neutral-500">ที่อยู่จัดส่ง</div>
-                              <StopBubble>
-                                <div className="text-sm font-medium text-neutral-900 break-words whitespace-pre-line">
-                                  {ship.addressText || "—"}
-                                </div>
-                              </StopBubble>
-                            </div>
-                            {ship.addressText && <Copyable text={ship.addressText} className="ml-2">คัดลอกที่อยู่</Copyable>}
-                          </div>
-                        </div>
-                      </div>
+    {/* ที่อยู่ */}
+    <div className="flex flex-wrap items-start gap-2 min-w-0 w-full md:col-span-1">
+      <div className="w-7 h-7 mt-0.5 rounded-full bg-white border grid place-items-center">
+        <FiMapPin className="text-neutral-600" />
+      </div>
+      <div className="min-w-0 flex-1">
+        <div className="text-xs text-neutral-500">ที่อยู่จัดส่ง</div>
+        <StopBubble>
+          <div className="text-sm font-medium text-neutral-900 whitespace-pre-line"
+               style={{ wordBreak: 'break-word', overflowWrap: 'anywhere' }}>
+            {ship.addressText || "—"}
+          </div>
+        </StopBubble>
+      </div>
+      {ship.addressText && (
+        <div className="order-last basis-full sm:order-none sm:basis-auto mt-2 sm:mt-0">
+          <Copyable text={ship.addressText}>คัดลอก</Copyable>
+        </div>
+      )}
+    </div>
+
+  </div>
+</div>
 
                       <div className="mt-3">
                         <OrderStepper status={o.status} />

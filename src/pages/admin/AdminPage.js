@@ -758,7 +758,86 @@ function matchStatusKeyword(order, kw) {
 
   return tokens.some((t) => t.includes(kw));
 }
+function AdminCancelModal({ open, onClose, onConfirm, order }) {
+  const [reason, setReason] = React.useState("");
+  const [restock, setRestock] = React.useState(true);
+  const [submitting, setSubmitting] = React.useState(false);
 
+  React.useEffect(() => {
+    if (open) { setReason(""); setRestock(true); setSubmitting(false); }
+  }, [open]);
+
+  if (!open) return null;
+
+  const max = 300;
+  const valid = reason.trim().length <= max; // ไม่บังคับขั้นต่ำ
+
+  const submit = async () => {
+    if (!valid || submitting) return;
+    setSubmitting(true);
+    await onConfirm({ reason: reason.trim(), restock });
+    setSubmitting(false);
+    onClose();
+  };
+
+  return (
+    <div className="fixed inset-0 z-[60] bg-black/50 backdrop-blur-[1px] grid place-items-center p-4"
+         onClick={onClose}>
+      <div className="w-full max-w-lg rounded-2xl bg-white overflow-hidden"
+           onClick={(e)=>e.stopPropagation()}>
+        <div className="px-5 py-4 border-b flex items-center justify-between">
+          <h3 className="font-semibold">ยืนยันการยกเลิกคำสั่งซื้อ</h3>
+          <button onClick={onClose} className="text-neutral-500 hover:text-black">✕</button>
+        </div>
+
+        <div className="p-5 space-y-3">
+          <div className="text-sm text-neutral-600">
+            คำสั่งซื้อ <b>#{order?.id || order?.order_code}</b> จะถูกยกเลิก กรุณาระบุเหตุผล (ไม่บังคับ)
+          </div>
+
+          <label className="block text-sm font-medium">เหตุผลในการยกเลิก</label>
+         <textarea
+  value={reason}
+  onChange={(e) => setReason(e.target.value)}
+  rows={4}
+  className="w-full rounded-xl border px-3 py-2 text-sm text-black outline-none focus:ring-2 focus:ring-black/10"
+  placeholder="เช่น ของหมด"
+/>
+
+          <div className="flex items-center justify-between text-xs">
+            <span className={valid ? "text-emerald-600" : "text-rose-600"}>
+              {valid ? "พร้อมส่ง" : `ไม่เกิน ${max} ตัวอักษร`}
+            </span>
+            <span className="text-neutral-500">{reason.trim().length} / {max}</span>
+          </div>
+
+          <label className="flex items-center gap-2 text-sm">
+            <input
+              type="checkbox"
+              checked={restock}
+              onChange={(e)=>setRestock(e.target.checked)}
+            />
+            คืนสต็อกสินค้าที่อยู่ในออเดอร์นี้
+          </label>
+        </div>
+
+        <div className="px-5 py-4 border-t flex items-center justify-end gap-2">
+          <button onClick={onClose} className="h-10 px-4 rounded-xl border hover:bg-neutral-50 text-sm">
+            ปิด
+          </button>
+          <button
+            onClick={submit}
+            disabled={!valid || submitting}
+            className={ "h-10 px-4 rounded-xl text-white text-sm " +
+                        (valid && !submitting ? "bg-rose-600 hover:bg-rose-700" : "bg-rose-300 cursor-not-allowed") }
+          >
+            {submitting ? "กำลังยกเลิก..." : "ยืนยันยกเลิก"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
 
 function OrdersPanel() {
   const [orders, setOrders] = useState([]);
@@ -781,6 +860,19 @@ function OrdersPanel() {
 
 // ช่วย normalize string
 const norm = (s) => String(s || "").toLowerCase().trim();
+const [cancelOpen, setCancelOpen] = React.useState(false);
+const [cancelTarget, setCancelTarget] = React.useState(null);
+
+function openCancelModal() {
+  if (!detail?.order) return;
+  setCancelTarget(detail.order);
+  setCancelOpen(true);
+}
+function closeCancelModal() {
+  setCancelOpen(false);
+  setCancelTarget(null);
+}
+
 
 const filtered = useMemo(() => {
   const kw = norm(q);
@@ -1062,15 +1154,9 @@ async function saveStatus() {
     }
   }
 
-  async function cancelOrder() {
+  async function cancelOrder({ reason = "", restock = true }) {
   const oid = detail?.order?.id;
   if (!oid) return;
-
-  const reason = window.prompt("กรุณากรอกเหตุผลในการยกเลิก:", "");
-  if (reason === null) return;
-
-  const restock = window.confirm("ต้องการคืนสต๊อกสินค้าด้วยหรือไม่? OK = คืนสต๊อก, Cancel = ไม่คืน");
-
   try {
     const res = await fetch(`${API_ORDERS}/${oid}/cancel`, {
       method: "PATCH",
@@ -1080,15 +1166,18 @@ async function saveStatus() {
     const data = await res.json();
     if (!res.ok) throw new Error(data?.message || "ยกเลิกออเดอร์ไม่สำเร็จ");
 
+    // อัปเดตตารางและหน้ารายละเอียด
     setOrders(os => os.map(o =>
-      o.id === oid ? { ...o, status: data.status, cancel_reason: data.cancel_reason } : o
+      o.id === oid ? { ...o, status: data.status, cancel_reason: data.cancel_reason,
+                       cancelled_by: data.cancelled_by, cancelled_at: data.cancelled_at } : o
     ));
     setDetail(d => d ? {
       ...d,
-      order: { ...d.order, status: data.status, cancel_reason: data.cancel_reason, cancelled_by: data.cancelled_by, cancelled_at: data.cancelled_at }
+      order: { ...d.order, status: data.status, cancel_reason: data.cancel_reason,
+               cancelled_by: data.cancelled_by, cancelled_at: data.cancelled_at }
     } : d);
 
-    alert("ยกเลิกออเดอร์เรียบร้อย");
+    alert("ยกเลิกออเดอร์เรียบร้อย" + (restock ? " (คืนสต็อกแล้ว)" : ""));
   } catch (e) {
     alert(e.message);
   }
@@ -1464,12 +1553,12 @@ async function saveStatus() {
 )}
 
                   <button
-                    onClick={cancelOrder}
-                    disabled={['cancelled','done','shipped'].includes(detail.order.status)}
-                    className="px-3 py-2 rounded-xl bg-neutral-700 text-white font-medium hover:bg-neutral-600 disabled:opacity-60"
-                  >
-                    ยกเลิกออเดอร์
-                  </button>
+  onClick={openCancelModal}
+  disabled={['cancelled','done','shipped'].includes(detail.order.status)}
+  className="px-3 py-2 rounded-xl bg-neutral-700 text-white font-medium hover:bg-neutral-600 disabled:opacity-60"
+>
+  ยกเลิกออเดอร์
+</button>
                 </div>
               </div>
 
@@ -1632,32 +1721,41 @@ async function saveStatus() {
               </div>
             </div>
 
-            {/* สรุปยอด */}
-            <div className="flex justify-end">
-              <div className="w-full sm:w-80 rounded-xl p-4 bg-neutral-800 text-neutral-100 border border-neutral-700 shadow-inner">
-                <dl className="space-y-2 text-sm">
-                  <div className="flex items-center justify-between">
-                    <dt className="text-neutral-300">ยอดสินค้า</dt>
-                    <dd className="font-medium tabular-nums">{CURRENCY(detail.order.subtotal ?? 0)}</dd>
-                  </div>
-                  <div className="flex items-center justify-between">
-                    <dt className="text-neutral-300">ค่าส่ง</dt>
-                    <dd className="font-medium tabular-nums">{CURRENCY(detail.order.shipping ?? 0)}</dd>
-                  </div>
-                  <div className="mt-2 pt-2 border-t border-neutral-600 flex items-baseline justify-between text-base">
-                    <dt className="font-semibold text-white">ยอดรวม</dt>
-                    <dd className="text-xl font-extrabold tracking-tight tabular-nums">
-                      {CURRENCY(detail.order.total_price ?? 0)}
-                    </dd>
-                  </div>
-                </dl>
-              </div>
+      {/* สรุปยอด */}
+      <div className="flex justify-end">
+        <div className="w-full sm:w-80 rounded-xl p-4 bg-neutral-800 text-neutral-100 border border-neutral-700 shadow-inner">
+          <dl className="space-y-2 text-sm">
+            <div className="flex items-center justify-between">
+              <dt className="text-neutral-300">ยอดสินค้า</dt>
+              <dd className="font-medium tabular-nums">{CURRENCY(detail.order.subtotal ?? 0)}</dd>
             </div>
-          </div>
+            <div className="flex items-center justify-between">
+              <dt className="text-neutral-300">ค่าส่ง</dt>
+              <dd className="font-medium tabular-nums">{CURRENCY(detail.order.shipping ?? 0)}</dd>
+            </div>
+            <div className="mt-2 pt-2 border-t border-neutral-600 flex items-baseline justify-between text-base">
+              <dt className="font-semibold text-white">ยอดรวม</dt>
+              <dd className="text-xl font-extrabold tracking-tight tabular-nums">
+                {CURRENCY(detail.order.total_price ?? 0)}
+              </dd>
+            </div>
+          </dl>
         </div>
-      ) : null}
+      </div>
     </div>
-  );
+  </div>
+) : null}
+
+{/* ✅ Modal ยกเลิกออเดอร์ */}
+<AdminCancelModal
+  open={cancelOpen}
+  order={cancelTarget}
+  onClose={closeCancelModal}
+  onConfirm={cancelOrder}
+/>
+
+</div>   
+);
 }
 
 

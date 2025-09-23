@@ -324,25 +324,27 @@ export default function ProductDetail() {
             </p>
           )}
         </div>
+{/* add to cart */}
+<button
+  type="button"
+  onClick={handleAdd}
+  disabled={isAllOut || (measureVariants.length > 0 && !selectedKey)}
+  className={`w-full font-medium py-3 px-6 rounded-lg shadow transition
+    ${
+      isAllOut || (measureVariants.length > 0 && !selectedKey)
+        ? "bg-gray-300 text-gray-600 cursor-not-allowed"
+        : "bg-black hover:bg-gray-800 text-white"
+    }`}
+>
+  {isAllOut
+    ? "สินค้าหมด"
+    : measureVariants.length > 0 && !selectedKey
+    ? "เลือก อก/ยาว ก่อน"
+    : "เพิ่มไปตะกร้า"}
+</button>
 
-        {/* add to cart */}
-        <button
-          type="button"
-          onClick={handleAdd}
-          disabled={isAllOut || (measureVariants.length > 0 && !selectedKey)}
-          className={`w-full font-medium py-3 px-6 rounded-lg shadow transition
-            ${
-              isAllOut || (measureVariants.length > 0 && !selectedKey)
-                ? "bg-gray-300 text-gray-600 cursor-not-allowed"
-                : "bg-black hover:bg-gray-800 text-white"
-            }`}
-        >
-          {isAllOut
-            ? "สินค้าหมด"
-            : measureVariants.length > 0 && !selectedKey
-            ? "เลือก อก/ยาว ก่อน"
-            : "เพิ่มไปตะกร้า"}
-        </button>
+{/* spacer กันแท็บล่างบัง (มือถือเท่านั้น) */}
+<div className="h-24 md:hidden" />
 
         {/* toast */}
         <div

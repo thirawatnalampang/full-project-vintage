@@ -153,7 +153,7 @@ function CancelModal({ open, order, onClose, onConfirm }) {
 
   if (!open) return null;
 
-  const min = 5, max = 300;
+  const min = 1, max = 300;
   const valid = reason.trim().length >= min && reason.trim().length <= max;
 
   const submit = async () => {
