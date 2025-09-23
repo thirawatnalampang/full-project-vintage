@@ -46,7 +46,14 @@ const payPillColor = (p) => ({
 
 const ORDER_FLOW = ["pending", "ready_to_ship", "shipped", "done"];
 const ORDER_FLOW_LABELS = ["รับคำสั่งซื้อ", "เตรียมจัดส่ง", "จัดส่งแล้ว", "สำเร็จ"];
-
+// วางใกล้ๆ FALLBACK_IMG
+const resolveImg = (v) => {
+  if (!v) return FALLBACK_IMG;
+  const s = String(v);
+  if (/^https?:\/\//i.test(s)) return s;         // URL เต็ม
+  if (s.startsWith("/")) return `${API_BASE}${s}`; // path เริ่มด้วย /
+  return `${API_BASE}/${s}`;                      // ชื่อไฟล์ / path สั้น
+};
 /* ===== Tracking helpers ===== */
 const trackingUrl = (carrier, code) => {
   if (!code) return null;
@@ -105,7 +112,6 @@ function Copyable({ text, children, className }) {
 function TrackingBadge({ carrier, code, updatedAt }) {
   if (!code) return null;
 
-  // ใช้ helper ที่ประกาศไว้ข้างบน
   const url = trackingUrl(carrier, code);
   if (!url) return null;
 
@@ -184,7 +190,6 @@ function extractShipping(o = {}) {
     if (postal) lines.push(postal);
   }
 
-  // ✅ ทำความสะอาดบรรทัด ป้องกันช่องว่างเกิน
   const cleanLines = lines
     .flatMap(v => String(v).split(/\r?\n/))
     .map(s => s.trim())
@@ -252,6 +257,100 @@ function OrderStepper({ status }) {
   );
 }
 
+/* ===== Cancel Modal (fixed typing) ===== */
+function CancelModal({ open, order, onClose, onConfirm }) {
+  const [reason, setReason] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+
+  useEffect(() => {
+    if (open) { setReason(""); setSubmitting(false); }
+  }, [open]);
+
+  if (!open) return null;
+
+  const min = 5, max = 300;
+  const valid = reason.trim().length >= min && reason.trim().length <= max;
+
+  const submit = async () => {
+    if (!valid || submitting) return;
+    setSubmitting(true);
+    await onConfirm({ orderId: order?.order_id, reason: reason.trim() });
+    setSubmitting(false);
+    onClose();
+  };
+
+  return (
+    // คลิกพื้นหลังเพื่อปิด
+    <div
+      className="fixed inset-0 z-[60] bg-black/40 backdrop-blur-[1px] grid place-items-center p-4"
+      onClick={onClose}
+    >
+      {/* กันคลิกทะลุเฉพาะกล่อง */}
+      <div
+        className="w-full max-w-lg rounded-2xl bg-white border shadow-xl overflow-hidden"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="px-5 py-4 border-b flex items-center justify-between">
+          <h3 className="font-semibold">ยืนยันการยกเลิกคำสั่งซื้อ</h3>
+          <button onClick={onClose} className="text-neutral-500 hover:text-black" title="ปิด">
+            <FiX size={20} />
+          </button>
+        </div>
+
+        <div className="p-5 space-y-3">
+          <div className="text-sm text-neutral-600">
+            คำสั่งซื้อ <b>#{order?.order_id}</b> จะถูกยกเลิก กรุณาระบุเหตุผล
+          </div>
+
+          <label className="block text-sm font-medium">
+            เหตุผลในการยกเลิก <span className="text-rose-600">*</span>
+          </label>
+
+          {/* ไม่ใส่ preventDefault ใดๆ ที่ textarea */}
+          <textarea
+            value={reason}
+            onChange={(e) => setReason(e.target.value)}
+            rows={4}
+            className="w-full rounded-xl border px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-black/10"
+            placeholder="เช่น ที่อยู่ผิด / สั่งซ้ำ / เปลี่ยนใจ / โอนผิด ฯลฯ"
+          />
+
+          <div className="flex items-center justify-between text-xs">
+            <span className={valid ? "text-emerald-600" : "text-rose-600"}>
+              {valid ? "พร้อมส่ง" : `พิมพ์อย่างน้อย ${min} ตัวอักษร และไม่เกิน ${max}`}
+            </span>
+            <span className="text-neutral-500">{reason.trim().length} / {max}</span>
+          </div>
+
+          <div className="bg-amber-50 border border-amber-200 text-amber-800 rounded-lg p-3 text-xs">
+            หมายเหตุ: หากร้านค้าเริ่มจัดส่งแล้ว อาจไม่สามารถยกเลิกได้
+          </div>
+        </div>
+
+        <div className="px-5 py-4 border-t flex items-center justify-end gap-2">
+          <button
+            onClick={onClose}
+            className="h-10 px-4 rounded-xl border hover:bg-neutral-50 text-sm"
+            disabled={submitting}
+          >
+            ปิด
+          </button>
+          <button
+            onClick={submit}
+            disabled={!valid || submitting}
+            className={cx(
+              "h-10 px-4 rounded-xl text-white text-sm inline-flex items-center gap-2",
+              valid && !submitting ? "bg-rose-600 hover:bg-rose-700" : "bg-rose-300 cursor-not-allowed"
+            )}
+          >
+            {submitting ? "กำลังยกเลิก..." : <><FiX /> ยืนยันยกเลิก</>}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 /* ===== Page ===== */
 export default function MyOrdersPage() {
   const { user } = useAuth();
@@ -263,7 +362,14 @@ export default function MyOrdersPage() {
   const [statusFilter, setStatusFilter] = useState("all");
   const [lastRefreshedAt, setLastRefreshedAt] = useState(null);
 
-  // โหลดรายการของฉัน (ใส่ email ใน deps แก้ eslint)
+  // Modal state
+  const [cancelOpen, setCancelOpen] = useState(false);
+  const [cancelTarget, setCancelTarget] = useState(null);
+
+  const openCancel = (order) => { setCancelTarget(order); setCancelOpen(true); };
+  const closeCancel = () => { setCancelOpen(false); setCancelTarget(null); };
+
+  // โหลดรายการของฉัน
   const reloadMine = useCallback(async () => {
     const qUser = encodeURIComponent(user?.user_id ?? "");
     const qEmail = encodeURIComponent(user?.email ?? "");
@@ -273,14 +379,14 @@ export default function MyOrdersPage() {
     setLastRefreshedAt(new Date());
   }, [user?.user_id, user?.email]);
 
-  async function cancelOrder(orderId) {
-    if (!window.confirm("ต้องการยกเลิกคำสั่งซื้อนี้ใช่ไหม?")) return;
+  // ยกเลิกออเดอร์ (ส่งเหตุผล)
+  async function cancelOrder(orderId, reason) {
     try {
       const res = await fetch(`${API_BASE}/api/orders/${orderId}/cancel`, {
-        method: "PATCH", // ให้ตรง backend ของคุณ
+        method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ buyer_id: user?.user_id }),
-        credentials: "omit", // ถ้า API ไม่ใช้คุกกี้ แนะนำ omit เพื่อเลี่ยง CORS รวม credentials
+        body: JSON.stringify({ buyer_id: user?.user_id, reason: String(reason || "").trim() }),
+        credentials: "omit",
       });
       if (!res.ok) {
         const t = await res.text();
@@ -288,6 +394,7 @@ export default function MyOrdersPage() {
         return;
       }
       await reloadMine();
+      alert("ยกเลิกคำสั่งซื้อเรียบร้อย");
     } catch (e) {
       console.error("cancel order error:", e);
       alert("เกิดข้อผิดพลาดในการยกเลิก");
@@ -313,32 +420,22 @@ export default function MyOrdersPage() {
   }, [rows, statusFilter]);
 
   const summary = useMemo(() => {
-  const norm = (v) => String(v || "").toLowerCase();
-
-  // ✅ เอาเฉพาะออเดอร์ที่จ่ายแล้ว และไม่ใช่สถานะยกเลิก
-  const paidRows = rows.filter(
-    (r) => norm(r.payment_status) === "paid" && norm(r.status) !== "cancelled"
-  );
-
-  const totalAmount = paidRows.reduce(
-    (sum, r) => sum + Number(r.total_amount || 0),
-    0
-  );
-
-  const totalOrders = rows.length; // ทั้งหมด (ถ้าจะนับเฉพาะที่จ่ายแล้วก็ใช้ paidRows.length)
-  const byStatus = rows.reduce((acc, r) => {
-    const k = norm(r.status || "unknown");
-    acc[k] = (acc[k] || 0) + 1;
-    return acc;
-  }, {});
-
-  return {
-    totalOrders,
-    totalAmount,            // 💰 ยอดใช้จ่ายรวมเฉพาะที่ "paid"
-    paidCount: paidRows.length, // (ตัวเลือก) จำนวนออเดอร์ที่จ่ายแล้ว
-    byStatus,
-  };
-}, [rows]);
+    const norm = (v) => String(v || "").toLowerCase();
+    const paidRows = rows.filter(
+      (r) => norm(r.payment_status) === "paid" && norm(r.status) !== "cancelled"
+    );
+    const totalAmount = paidRows.reduce(
+      (sum, r) => sum + Number(r.total_amount || 0),
+      0
+    );
+    const totalOrders = rows.length;
+    const byStatus = rows.reduce((acc, r) => {
+      const k = norm(r.status || "unknown");
+      acc[k] = (acc[k] || 0) + 1;
+      return acc;
+    }, {});
+    return { totalOrders, totalAmount, paidCount: paidRows.length, byStatus };
+  }, [rows]);
 
   const counts = useMemo(() => ({
     all: rows.length,
@@ -473,7 +570,7 @@ export default function MyOrdersPage() {
                         {new Date(o.order_date).toLocaleString("th-TH")} • {o.total_items} ชิ้น
                       </div>
 
-                      {/* ผู้รับ & ที่อยู่จัดส่ง (ครบทุกบรรทัด, ไม่ truncate) */}
+                      {/* ผู้รับ & ที่อยู่จัดส่ง */}
                       <div className="mt-3 rounded-xl border border-dashed bg-neutral-50/60 p-3">
                         <div className="grid gap-3 md:grid-cols-3 md:items-start">
                           {/* ชื่อ */}
@@ -529,48 +626,66 @@ export default function MyOrdersPage() {
                       <div className="mt-3">
                         <OrderStepper status={o.status} />
                       </div>
+{o.status === "cancelled" && (
+  <div className="mt-2 flex flex-wrap gap-2">
+    {o.cancel_reason && (
+      <span className="inline-flex items-center px-2 py-1 rounded-md text-xs bg-rose-100 text-rose-800 border border-rose-200">
+        เหตุผล: {o.cancel_reason}
+      </span>
+    )}
+    <span className="inline-flex items-center px-2 py-1 rounded-md text-xs bg-neutral-100 text-neutral-800 border">
+      ยกเลิกโดย: {({ buyer: "ผู้ซื้อ", admin: "แอดมิน", system: "ระบบ" }[o.cancelled_by] || "ไม่ระบุ")}
+    </span>
+    {o.cancelled_at && (
+      <span className="inline-flex items-center px-2 py-1 rounded-md text-xs bg-neutral-100 text-neutral-800 border">
+        เมื่อ: {new Date(o.cancelled_at).toLocaleString()}
+      </span>
+    )}
+  </div>
+)}
 
-                      {/* รูปสินค้า + รายชื่อ */}
-                      {Array.isArray(o.items) && o.items.length > 0 && (
-                        <>
-                          <div className="mt-3 flex flex-wrap gap-2">
-                            {o.items.map((it) => (
-                              <img
-                                key={it.order_detail_id}
-                                src={it.item_image || FALLBACK_IMG}
-                                alt={it.item_name || it.item_type}
-                                className="w-12 h-12 rounded-md object-cover border"
-                                onError={(e) => { e.currentTarget.src = FALLBACK_IMG; }}
-                                title={it.item_name || it.item_type}
-                                onClick={(e)=>e.stopPropagation()}
-                              />
-                            ))}
-                          </div>
-                          <ul className="mt-3 space-y-1">
-                            {o.items.map((it, idx) => (
-                              <li
-                                key={it.order_detail_id || `name-${idx}`}
-                                className="flex items-center gap-2 text-base font-semibold text-gray-900"
-                              >
-                                <span className="truncate">{it.item_name || it.item_type || "สินค้า"}</span>
-                                <span className="text-sm text-gray-500">× {Number(it.quantity || 1)}</span>
-                              </li>
-                            ))}
-                          </ul>
-                        </>
-                      )}
-                    </div>
+                     {/* รูปสินค้า + รายชื่อ (เวอร์ชันสั้น ดูได้แน่) */}
+{(o.items ?? []).length > 0 ? (
+  <div className="mt-3 space-y-2">
+    {o.items.map((it, idx) => {
+      const name = it.item_name || it.name || it.item_type || "สินค้า";
+      const qty  = Number(it.quantity || 1);
+      const img  = it.item_image || it.image || it.image_url; // รองรับหลายชื่อฟิลด์
 
-                    <div className="flex flex-col items-end gap-2 shrink-0">
-                      <TrackingBadge
-                        carrier={o.carrier}
-                        code={o.tracking_code}
-                        updatedAt={o.tracking_updated_at}
-                      />
+      return (
+        <div
+          key={it.order_detail_id || it.id || `item-${idx}`}
+          className="flex items-center gap-3 rounded-lg border bg-neutral-50 p-2 hover:bg-neutral-100"
+          onClick={(e) => e.stopPropagation()}
+          title={name}
+        >
+          <img
+            src={resolveImg(img)}
+            alt={name}
+            className="w-12 h-12 rounded-md object-cover border shrink-0"
+            onError={(e) => { e.currentTarget.src = FALLBACK_IMG; }}
+          />
+          <div className="min-w-0 flex-1">
+            <div className="text-sm font-medium truncate">{name}</div>
+            <div className="text-xs text-gray-500">× {qty}</div>
+          </div>
+        </div>
+      );
+    })}
+  </div>
+) : null}
+</div> {/* ✅ ปิด div.min-w-0 flex-1 ฝั่งซ้าย */}
+
+<div className="flex flex-col items-end gap-2 shrink-0">
+  <TrackingBadge
+    carrier={o.carrier}
+    code={o.tracking_code}
+    updatedAt={o.tracking_updated_at}
+  />
 
                       {(["pending", "ready_to_ship"].includes(o.status) && !o.carrier && !o.tracking_code) && (
                         <button
-                          onClick={(e) => { e.preventDefault(); e.stopPropagation(); cancelOrder(o.order_id); }}
+                          onClick={(e) => { e.preventDefault(); e.stopPropagation(); openCancel(o); }}
                           className="inline-flex items-center gap-2 px-3 h-9 rounded-lg bg-rose-600 text-white hover:bg-rose-700 text-sm"
                           title="ยกเลิกคำสั่งซื้อนี้"
                         >
@@ -589,6 +704,14 @@ export default function MyOrdersPage() {
           </div>
         )
       )}
+
+      {/* Cancel modal */}
+      <CancelModal
+        open={cancelOpen}
+        order={cancelTarget}
+        onClose={closeCancel}
+        onConfirm={({ orderId, reason }) => cancelOrder(orderId, reason)}
+      />
     </div>
   );
 }

@@ -180,7 +180,7 @@ export default function CheckoutPage() {
       if (!String(form[k] || '').trim()) return `กรุณากรอกข้อมูลให้ครบ: ${k}`;
     }
     if (!/^\d{5}$/.test(String(form.postcode))) return 'รหัสไปรษณีย์ต้องเป็นตัวเลข 5 หลัก';
-    if (!/^\d{9,10}$/.test(String(form.phone))) return 'เบอร์โทรควรเป็นตัวเลข 9-10 หลัก';
+    if (!/^\d{10}$/.test(String(form.phone))) return 'กรุณากรอกเบอร์โทรเป็นตัวเลข 10 หลัก';
     if (paymentMethod === 'transfer' && !slipFile) return 'กรุณาแนบรูปสลิปโอนเงิน';
     return null;
   }
@@ -356,19 +356,33 @@ export default function CheckoutPage() {
                 <input
                   name="fullName"
                   value={form.fullName}
-                  onChange={onChange}
-                  className="w-full rounded-xl border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-900 px-3 py-2"
-                />
+  onChange={(e) => {
+    // กรองออก: ตัวเลข + และ -
+    const v = e.target.value.replace(/[0-9+-]/g, '');
+    setForm(f => ({ ...f, fullName: v }));
+  }}
+  placeholder="เช่น สมชาย ใจดี"
+  className="w-full rounded-xl border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-900 px-3 py-2"
+/>
               </div>
               <div>
                 <label className="block text-sm mb-1">เบอร์โทร *</label>
                 <input
-                  name="phone"
-                  value={form.phone}
-                  onChange={onChange}
-                  placeholder="เช่น 0812345678"
-                  className="w-full rounded-xl border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-900 px-3 py-2"
-                />
+  name="phone"
+  value={form.phone}
+  onChange={(e) => {
+    // กรองให้เหลือเฉพาะตัวเลข
+    let v = e.target.value.replace(/\D/g, '');
+    // จำกัดไม่เกิน 10 ตัว
+    if (v.length > 10) v = v.slice(0, 10);
+    setForm(f => ({ ...f, phone: v }));
+  }}
+  placeholder="เช่น 0812345678"
+  maxLength={10} // กันไว้ด้วยอีกชั้น
+  inputMode="numeric" // มือถือจะแสดง keypad ตัวเลข
+  className="w-full rounded-xl border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-900 px-3 py-2"
+/>
+
               </div>
 
               <div className="md:col-span-2">

@@ -1,10 +1,11 @@
+// src/App.jsx
 import React, { useState } from 'react';
-import { Routes, Route } from 'react-router-dom';
+import { Routes, Route, useLocation } from 'react-router-dom';
+import Header from './components/Navbar';
 import Home from './pages/Home';
 import Category from './pages/Category';
 import ProductDetail from './pages/ProductDetail';
-import Cart from './pages/Cart';           // ใช้เป็น “หน้าตะกร้า”
-import Header from './components/Navbar';
+import Cart from './pages/Cart';
 import LoginForm from './pages/LoginForm';
 import RegisterForm from './pages/RegisterForm';
 import ProfilePage from './pages/ProfilePage';
@@ -17,13 +18,18 @@ import OrderDetailPage from "./pages/OrderDetailPage";
 
 import './App.css';
 
-
 function App() {
   const [cart, setCart] = useState([]);
+  const location = useLocation();
+  const isAdmin = location.pathname.startsWith('/admin');
 
   return (
     <>
-      <Header />
+      {/* ถ้าเป็น /admin → ซ่อนในมือถือ แต่เดสก์ท็อปยังแสดง */}
+      <div className={isAdmin ? "hidden md:block" : "block"}>
+        <Header />
+      </div>
+
       <Routes>
         <Route path="/" element={<Home cart={cart} setCart={setCart} />} />
         <Route path="/category/:categoryName" element={<Category cart={cart} setCart={setCart} />} />
@@ -34,14 +40,12 @@ function App() {
         <Route path="/profile" element={<ProfilePage />} />
         <Route path="/admin" element={<AdminPage />} />
         <Route path="/checkout" element={<CheckoutPage />} />
-  <Route path="/order-success" element={<OrderSuccess />} />
-  <Route path="/order-success/:orderId" element={<OrderSuccess />} />
+        <Route path="/order-success" element={<OrderSuccess />} />
+        <Route path="/order-success/:orderId" element={<OrderSuccess />} />
         <Route path="/orders" element={<MyOrders />} />
         <Route path="/search" element={<SearchPage />} />
         <Route path="/orders/:orderId" element={<OrderDetailPage />} />
-
       </Routes>
-      {/* ไม่มี <Cart /> ลอยล่างขวาแล้ว */}
     </>
   );
 }

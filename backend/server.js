@@ -12,42 +12,92 @@ const bcrypt = require('bcrypt');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
-
+const sharp = require('sharp');
 // ====== Config ======
 const uploadDir = "C:/Users/ADMIN/Desktop/อัพโหลดเสือผ้า/uploads";  // ✅ path เต็ม (Windows ใช้ / ได้)
 if (!fs.existsSync(uploadDir)) {
   fs.mkdirSync(uploadDir, { recursive: true });
 }
 
-// ====== Slip Upload (ไปที่ uploads/slips) ======
+
+// ====== Slip Upload (บีบอัดก่อนเก็บที่ uploads/slips) ======
 const slipDir = path.join(uploadDir, 'slips');
 if (!fs.existsSync(slipDir)) fs.mkdirSync(slipDir, { recursive: true });
 
-const slipStorage = multer.diskStorage({
-  destination: (_req, _file, cb) => cb(null, slipDir),
-  filename: (_req, file, cb) => cb(null, `${Date.now()}${path.extname(file.originalname)}`),
-});
-const slipUpload = multer({ storage: slipStorage });
+// รับได้ทั้งชื่อฟิลด์ 'image' และ 'file'
+const slipUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 5 * 1024 * 1024 },
+  fileFilter: (_req, file, cb) => {
+    const ok = ['image/jpeg','image/png','image/webp','image/jpg','image/avif'];
+    if (!ok.includes(file.mimetype)) return cb(new Error('รองรับเฉพาะไฟล์รูปภาพเท่านั้น'));
+    cb(null, true);
+  }
+}).fields([
+  { name: 'image', maxCount: 1 },
+  { name: 'file',  maxCount: 1 },
+]);
 
-// ====== Profile Upload (ไปที่ uploads/profile) ======
+
+// ====== Profile Upload (บีบอัดก่อนเก็บ) ======
 const profileDir = path.join(uploadDir, 'profile');
 if (!fs.existsSync(profileDir)) fs.mkdirSync(profileDir, { recursive: true });
 
-const profileStorage = multer.diskStorage({
-  destination: (_req, _file, cb) => cb(null, profileDir),
-  filename: (_req, file, cb) => cb(null, `${Date.now()}${path.extname(file.originalname)}`),
+// ใช้ memoryStorage (ไม่เขียนไฟล์ตรง ๆ แต่เก็บใน buffer)
+const profileUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 5 * 1024 * 1024 }, // จำกัดไฟล์อัปโหลดไม่เกิน 5MB
 });
-const profileUpload = multer({ storage: profileStorage });
 
-// ====== Product Upload (ไปที่ uploads/products) ======
+
+
+/// ====== Product Upload (ไปที่ uploads/products) ======
 const productDir = path.join(uploadDir, 'products');
 if (!fs.existsSync(productDir)) fs.mkdirSync(productDir, { recursive: true });
 
-const productStorage = multer.diskStorage({
-  destination: (_req, _file, cb) => cb(null, productDir),
-  filename: (_req, file, cb) => cb(null, `${Date.now()}${path.extname(file.originalname)}`),
-});
-const productUpload = multer({ storage: productStorage });
+const ALLOWED_MIME = new Set([
+  'image/jpeg','image/png','image/webp','image/gif','image/avif','image/jpg'
+]);
+
+// ใช้ memoryStorage
+const productUploadFields = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 8 * 1024 * 1024 }, // จำกัด 8MB/ไฟล์
+  fileFilter: (_req, file, cb) => {
+    if (!ALLOWED_MIME.has(file.mimetype)) {
+      return cb(new Error('รองรับเฉพาะไฟล์รูปภาพเท่านั้น'));
+    }
+    cb(null, true);
+  },
+}).fields([
+  { name: 'image',  maxCount: 1  }, // ปก
+  { name: 'images', maxCount: 10 }, // แกลเลอรี
+]);
+// helper: สร้างชื่อไฟล์และบันทึก webp
+const newName = (prefix='product') =>
+  `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2,7)}.webp`;
+
+async function saveWebp(buffer, {
+  dir,
+  maxW = 1600,
+  maxH = 1600,
+  quality = 82,
+  prefix = 'product'
+}) {
+  const filename = newName(prefix);
+  const outPath = path.join(dir, filename);
+
+  await sharp(buffer)
+    .rotate() // ตาม EXIF
+    .resize(maxW, maxH, { fit: 'inside', withoutEnlargement: true })
+    .webp({ quality })
+    .toFile(outPath);
+
+  // สมมุติว่ามี app.use('/uploads', express.static(uploadDir)) แล้ว
+  const publicUrl = `/uploads/products/${filename}`;
+  return publicUrl;
+}
+
 // serve static files
 app.use('/uploads', express.static(uploadDir));
 app.use(cors());
@@ -125,15 +175,29 @@ const now = () => Date.now();
 const iso = (t = Date.now()) => new Date(t).toISOString();
 const cleanupOtp = (email) => { delete otpStore[email]; };
 /* ====== อัปโหลดรูปโปรไฟล์ ====== */
-app.post('/api/profile/upload', profileUpload.single('image'), (req, res) => {
-  if (!req.file) {
-    return res.status(400).json({ message: 'ไม่มีไฟล์อัปโหลด' });
-  }
+// Route อัปโหลด
+app.post('/api/profile/upload', profileUpload.single('image'), async (req, res) => {
+  try {
+    if (!req.file) {
+      return res.status(400).json({ message: 'ไม่มีไฟล์อัปโหลด' });
+    }
 
-  // ✅ ส่ง URL ที่ชี้ไปยังโฟลเดอร์ profile
-  res.json({
-    url: `/uploads/profile/${req.file.filename}`
-  });
+    // ตั้งชื่อไฟล์ใหม่
+    const filename = `profile_${Date.now()}.webp`;
+    const outPath = path.join(profileDir, filename);
+
+    // บีบอัดด้วย sharp
+    await sharp(req.file.buffer)
+      .rotate()
+      .resize(512, 512, { fit: 'inside', withoutEnlargement: true }) // ไม่ให้เกิน 512px
+      .webp({ quality: 80 })
+      .toFile(outPath);
+
+    res.json({ url: `/uploads/profile/${filename}` });
+  } catch (err) {
+    console.error('Profile upload error:', err);
+    res.status(500).json({ message: 'อัปโหลดรูปไม่สำเร็จ' });
+  }
 });
 
 
@@ -480,7 +544,7 @@ app.post('/api/admin/categories', async (req, res) => {
 app.get('/api/admin/products', async (req, res) => {
   try {
     const q = `
-      SELECT id, name, price, stock, category_id, description, image, status,
+      SELECT id, name, price, stock, category_id, description, image,images_json, status,
              measure_variants, created_at, updated_at
       FROM products
       ORDER BY id DESC
@@ -550,9 +614,7 @@ function parseMeasureVariants(input, body = {}) {
     stock:     toInt(v?.stock),
   })).filter(v => Number.isFinite(v.chest_in) && Number.isFinite(v.length_in));
 }
-
-// ========== CREATE ==========
-app.post('/api/admin/products', productUpload.single('image'), async (req, res) => {
+app.post('/api/admin/products', productUploadFields, async (req, res) => {
   try {
     const { name, price, stock, category_id, description } = req.body;
     if (!name || String(name).trim() === '') {
@@ -561,14 +623,46 @@ app.post('/api/admin/products', productUpload.single('image'), async (req, res) 
 
     const mv = parseMeasureVariants(req.body.measureVariants, req.body);
     const totalStock = mv.length > 0 ? sumStockFromMeasures(mv) : toInt(stock);
-    const imagePath = req.file ? `/uploads/products/${req.file.filename}` : null;
+
+    // ✅ ประมวลผลรูปจาก buffer ด้วย sharp
+    const files = req.files || {};
+    let coverUrl = null;
+    const galleryUrls = [];
+
+    // ปก
+    if (files.image?.[0]) {
+      coverUrl = await saveWebp(files.image[0].buffer, {
+        dir: productDir,
+        maxW: 1280,
+        maxH: 1280,
+        quality: 82,
+        prefix: 'product_cover'
+      });
+    }
+
+    // แกลเลอรี
+    if (files.images?.length) {
+      for (const f of files.images) {
+        const url = await saveWebp(f.buffer, {
+          dir: productDir,
+          maxW: 1600,
+          maxH: 1600,
+          quality: 82,
+          prefix: 'product_img'
+        });
+        galleryUrls.push(url);
+      }
+    }
+
+    // ถ้าไม่มี cover แต่มี gallery → ใช้รูปแรกเป็น cover
+    const finalCover = coverUrl || galleryUrls[0] || null;
 
     const q = `
       INSERT INTO products (
-        name, price, stock, category_id, description, image, status,
-        measure_variants, created_at, updated_at
+        name, price, stock, category_id, description,
+        image, images_json, status, measure_variants, created_at, updated_at
       )
-      VALUES ($1,$2,$3,$4,$5,$6,'active',$7::jsonb,NOW(),NOW())
+      VALUES ($1,$2,$3,$4,$5,$6,$7,'active',$8::jsonb,NOW(),NOW())
       RETURNING *
     `;
     const params = [
@@ -577,7 +671,8 @@ app.post('/api/admin/products', productUpload.single('image'), async (req, res) 
       totalStock,
       category_id ? Number(category_id) : null,
       description || '',
-      imagePath,
+      finalCover,
+      JSON.stringify(galleryUrls),
       mv.length ? JSON.stringify(mv) : null,
     ];
     const result = await pool.query(q, params);
@@ -587,29 +682,75 @@ app.post('/api/admin/products', productUpload.single('image'), async (req, res) 
     return res.status(500).json({ message: 'Server error' });
   }
 });
-
-// ========== UPDATE ==========
-app.put('/api/admin/products/:id', productUpload.single('image'), async (req, res) => {
+app.put('/api/admin/products/:id', productUploadFields, async (req, res) => {
   try {
     const { id } = req.params;
-    const { name, price, stock, category_id, description, oldImage } = req.body;
+    const { name, price, stock, category_id, description, oldImage, keepImages } = req.body;
 
     if (!name || String(name).trim() === '') {
       return res.status(400).json({ message: 'ชื่อสินค้าเป็นค่าว่างไม่ได้' });
     }
 
-    const imagePath = req.file ? `/uploads/products/${req.file.filename}` : (oldImage || null);
+    // ของเดิม
+    const cur = await pool.query('SELECT image, images_json FROM products WHERE id=$1', [Number(id)]);
+    if (!cur.rowCount) return res.status(404).json({ message: 'ไม่พบสินค้า' });
 
-    // normalize measure variants
-    const mvRaw = parseMeasureVariants(req.body.measureVariants, req.body);
+    let cover = cur.rows[0].image || null;
+    let gallery = [];
+    try { gallery = JSON.parse(cur.rows[0].images_json || '[]'); } catch { gallery = []; }
+
+    // ✅ keepImages: array ของ URL ที่ client ต้องการเก็บไว้
+    let kept = gallery;
+    try {
+      if (typeof keepImages === 'string') kept = JSON.parse(keepImages || '[]');
+      else if (Array.isArray(keepImages)) kept = keepImages;
+    } catch {/* ignore */}
+
+    // รูปใหม่จากอัปโหลด (แปลงผ่าน sharp)
+    const files = req.files || {};
+    const newGallery = [];
+
+    if (files.images?.length) {
+      for (const f of files.images) {
+        const url = await saveWebp(f.buffer, {
+          dir: productDir,
+          maxW: 1600,
+          maxH: 1600,
+          quality: 82,
+          prefix: 'product_img'
+        });
+        newGallery.push(url);
+      }
+    }
+
+    // รวมแกลเลอรี: kept + ของใหม่
+    gallery = [...kept, ...newGallery];
+
+    // cover: ลำดับความสำคัญ ไฟล์ใหม่ > oldImage > รูปแรกใน gallery
+    if (files.image?.[0]) {
+      cover = await saveWebp(files.image[0].buffer, {
+        dir: productDir,
+        maxW: 1280,
+        maxH: 1280,
+        quality: 82,
+        prefix: 'product_cover'
+      });
+    } else if (oldImage) {
+      cover = oldImage;
+    } else if (!cover || !gallery.includes(cover)) {
+      cover = gallery[0] || null;
+    }
+
+    // stock จาก measure variants
+    const mvRaw  = parseMeasureVariants(req.body.measureVariants, req.body);
     const mvNorm = normalizeMV(mvRaw);
     const totalStock = mvNorm.length > 0 ? stockFromMV(mvNorm) : toInt(stock);
 
     const q = `
       UPDATE products
-      SET name=$1, price=$2, stock=$3, category_id=$4, description=$5, image=$6,
-          measure_variants=$7::jsonb, updated_at=NOW()
-      WHERE id=$8
+      SET name=$1, price=$2, stock=$3, category_id=$4, description=$5,
+          image=$6, images_json=$7, measure_variants=$8::jsonb, updated_at=NOW()
+      WHERE id=$9
       RETURNING *`;
     const params = [
       String(name).trim(),
@@ -617,22 +758,20 @@ app.put('/api/admin/products/:id', productUpload.single('image'), async (req, re
       totalStock,
       category_id ? Number(category_id) : null,
       description || '',
-      imagePath,
+      cover,
+      JSON.stringify(gallery),
       mvNorm.length ? JSON.stringify(mvNorm) : null,
       Number(id),
     ];
     const result = await pool.query(q, params);
+    if (!result.rowCount) return res.status(404).json({ message: 'ไม่พบสินค้า' });
 
-    if (result.rowCount === 0) {
-      return res.status(404).json({ message: 'ไม่พบสินค้า' });
-    }
     return res.status(200).json({ success: true, product: result.rows[0] });
   } catch (err) {
     console.error('PUT /products error:', err);
     return res.status(500).json({ message: 'เกิดข้อผิดพลาดในการบันทึกข้อมูลสินค้า' });
   }
 });
-
 app.delete('/api/admin/products/:id', async (req, res) => {
   try {
     const id = Number(req.params.id);
@@ -652,7 +791,7 @@ app.get('/api/products/by-category/:categoryId', async (req, res) => {
   try {
     const { categoryId } = req.params;
     const q = `
-      SELECT id, name, price, stock, description, image, category_id, measure_variants
+      SELECT id, name, price, stock, description, image, category_id, measure_variants, images_json
       FROM products
       WHERE category_id = $1
       ORDER BY id DESC`;
@@ -668,7 +807,7 @@ app.get('/api/admin/products/:id', async (req, res) => {
   try {
     const { id } = req.params;
     const q = `
-      SELECT id, name, price, stock, description, image, category_id, measure_variants
+      SELECT id, name, price, stock, description, image, category_id, measure_variants, images_json
       FROM products
       WHERE id = $1`;
     const result = await pool.query(q, [id]);
@@ -683,184 +822,7 @@ app.get('/api/admin/products/:id', async (req, res) => {
 });
 
 
-// ================== CANCEL ORDER + RESTOCK ==================
-app.patch('/api/admin/orders/:id/cancel', async (req, res) => {
-  const client = await pool.connect();
-  try {
-    const orderId = Number(req.params.id);
-    const restock = !!req.body?.restock;
-    if (!Number.isFinite(orderId)) {
-      return res.status(400).json({ message: 'invalid order id' });
-    }
 
-    await client.query('BEGIN');
-
-    const oQ = await client.query(
-      `SELECT id, status, cancelled_restocked_at
-         FROM orders
-        WHERE id = $1
-        FOR UPDATE`,
-      [orderId]
-    );
-    if (!oQ.rowCount) {
-      await client.query('ROLLBACK');
-      return res.status(404).json({ message: 'ไม่พบออเดอร์' });
-    }
-    const order = oQ.rows[0];
-    const alreadyRestocked = !!order.cancelled_restocked_at;
-
-    if (order.status === 'cancelled' || order.status === 'done') {
-      await client.query('ROLLBACK');
-      return res.json({ success: true, status: order.status, note: 'ออเดอร์อยู่ในสถานะสิ้นสุดแล้ว' });
-    }
-
-    // load order_items
-    const q = await client.query(
-      `SELECT product_id, quantity, size, measures
-         FROM order_items
-        WHERE order_id = $1`,
-      [orderId]
-    );
-    const items = q.rows.map(r => {
-      let chest = null, length = null;
-      if (r.measures && typeof r.measures === 'object') {
-        chest  = toNum(r.measures.chest_in  ?? r.measures.chest  ?? r.measures.chest_cm);
-        length = toNum(r.measures.length_in ?? r.measures.length ?? r.measures.length_cm);
-      }
-      return {
-        product_id: r.product_id,
-        quantity: Number(r.quantity || 0),
-        size: r.size ? String(r.size).trim() : null,
-        chest, length
-      };
-    });
-
-    if (restock && !alreadyRestocked && items?.length) {
-      for (const it of items) {
-        const pid = it.product_id;
-        const qty = Number(it.quantity || 0);
-        if (!Number.isFinite(qty) || qty <= 0) continue;
-
-        const pQ = await client.query(
-          `SELECT id, stock, measure_variants
-             FROM products
-            WHERE id = $1
-            FOR UPDATE`,
-          [pid]
-        );
-        if (!pQ.rowCount) continue;
-
-        const prod = pQ.rows[0];
-        let mv = normalizeMV(prod.measure_variants);
-
-        let idx = -1;
-        if (it.size) {
-          idx = mv.findIndex(v => String(v.size || '').toLowerCase() === it.size.toLowerCase());
-        }
-        if (idx < 0 && it.chest != null && it.length != null) {
-          idx = mv.findIndex(v => toNum(v.chest_in) === it.chest && toNum(v.length_in) === it.length);
-        }
-
-        if (idx >= 0) {
-          mv[idx].stock = Number(mv[idx].stock || 0) + qty;
-        } else if (it.size || it.chest != null || it.length != null) {
-          mv.push({ size: it.size || null, chest_in: it.chest, length_in: it.length, stock: qty });
-        }
-
-        const totalFromMV = stockFromMV(mv);
-        const newStock = totalFromMV > 0 ? totalFromMV : Number(prod.stock || 0) + qty;
-
-        await client.query(
-          `UPDATE products
-              SET stock = $1,
-                  measure_variants = $2::jsonb,
-                  updated_at = NOW()
-            WHERE id = $3`,
-          [newStock, mv.length ? JSON.stringify(mv) : null, pid]
-        );
-      }
-    }
-
-    const upd = await client.query(
-      `UPDATE orders
-          SET status = 'cancelled',
-              cancelled_restocked_at = CASE
-                WHEN $2::boolean = true AND cancelled_restocked_at IS NULL THEN NOW()
-                ELSE cancelled_restocked_at
-              END
-        WHERE id = $1
-        RETURNING id, status, cancelled_restocked_at`,
-      [orderId, restock]
-    );
-
-    await client.query('COMMIT');
-    return res.json({
-      success: true,
-      status: upd.rows[0].status,
-      cancelled_restocked_at: upd.rows[0].cancelled_restocked_at
-    });
-  } catch (err) {
-    console.error('PATCH /api/admin/orders/:id/cancel error:', err);
-    try { await client.query('ROLLBACK'); } catch {}
-    return res.status(500).json({ message: 'เกิดข้อผิดพลาดในการยกเลิกออเดอร์' });
-  } finally {
-    client.release();
-  }
-});
-/* ===================== ผู้ใช้ยกเลิก (คืนสต๊อกเสมอ) ===================== */
-app.patch('/api/orders/:id/cancel', async (req, res) => {
-  const client = await pool.connect();
-  try {
-    const orderId = Number(req.params.id);
-    if (!Number.isFinite(orderId)) return res.status(400).json({ message: 'invalid order id' });
-
-    await client.query('BEGIN');
-
-    const oQ = await client.query(
-      `SELECT id, status, cancelled_restocked_at
-         FROM orders
-        WHERE id=$1
-        FOR UPDATE`,
-      [orderId]
-    );
-    if (!oQ.rowCount) { await client.query('ROLLBACK'); return res.status(404).json({ message: 'ไม่พบออเดอร์' }); }
-    const order = oQ.rows[0];
-
-    // ผู้ใช้ยกเลิก: อนุญาตเฉพาะสถานะที่ยังดำเนินการ (ไม่ใช่ shipped/done/cancelled)
-    if (!['pending','ready_to_ship'].includes(order.status)) {
-      await client.query('ROLLBACK');
-      return res.status(400).json({ message: 'สถานะนี้ยกเลิกไม่ได้' });
-    }
-
-    // คืนสต๊อก “เสมอ”
-    const items = await _loadOrderItemsForCancel(client, orderId);
-    await _restockItems(client, items);
-
-    // อัปเดตสถานะ (not delete)
-    const upd = await client.query(
-      `UPDATE orders
-          SET status='cancelled',
-              cancelled_restocked_at = COALESCE(cancelled_restocked_at, NOW()),
-              updated_at = NOW()
-        WHERE id=$1
-        RETURNING id, status, cancelled_restocked_at`,
-      [orderId]
-    );
-
-    await client.query('COMMIT');
-    return res.json({
-      success: true,
-      status: upd.rows[0].status,
-      cancelled_restocked_at: upd.rows[0].cancelled_restocked_at
-    });
-  } catch (err) {
-    console.error('PATCH /api/orders/:id/cancel error:', err);
-    try { await client.query('ROLLBACK'); } catch {}
-    return res.status(500).json({ message: 'เกิดข้อผิดพลาดในการยกเลิกออเดอร์' });
-  } finally {
-    client.release();
-  }
-});
 /* ===================== Helpers (Stock) ===================== */
 const _toNum = (v) => {
   const n = Number(v);
@@ -966,12 +928,12 @@ async function _loadOrderItemsForCancel(client, orderId) {
   });
 }
 
-/* ===================== ผู้ใช้ยกเลิก (คืนสต๊อกเสมอ) ===================== */
-// ✅ รองรับทั้ง PATCH และ PUT (ให้ FE ไม่ต้องแก้ก็ได้)
+// ✅ ผู้ใช้ยกเลิก (คืนสต๊อกเสมอ)
 async function _cancelOrderHandler(req, res) {
   const client = await pool.connect();
   try {
     const orderId = Number(req.params.id);
+    const reason  = (req.body?.reason || '').trim() || null; // << เพิ่มบรรทัดนี้
     if (!Number.isFinite(orderId)) return res.status(400).json({ message: 'invalid order id' });
 
     await client.query('BEGIN');
@@ -991,44 +953,58 @@ async function _cancelOrderHandler(req, res) {
       return res.status(400).json({ message: 'สถานะนี้ยกเลิกไม่ได้' });
     }
 
-    // 👉 ชื่อฟังก์ชันที่ถูกต้อง
+    // คืนสต๊อก (ของผู้ใช้ให้คืนเสมอ)
     const items = await _loadOrderItemsForCancel(client, orderId);
-
     await _restockItems(client, items);
 
+    // ✅ บันทึกเหตุผล + ผู้ยกเลิก + เวลา
     const upd = await client.query(
       `UPDATE orders
           SET status='cancelled',
+              cancel_reason        = COALESCE($2, cancel_reason),
+              cancelled_by         = COALESCE(cancelled_by, 'buyer'),
+              cancelled_at         = COALESCE(cancelled_at, NOW()),
               cancelled_restocked_at = COALESCE(cancelled_restocked_at, NOW()),
-              updated_at = NOW()
+              updated_at           = NOW()
         WHERE id=$1
-        RETURNING id, status, cancelled_restocked_at`,
-      [orderId]
+        RETURNING id, status, cancel_reason, cancelled_by, cancelled_at, cancelled_restocked_at`,
+      [orderId, reason]
     );
 
     await client.query('COMMIT');
     return res.json({
       success: true,
       status: upd.rows[0].status,
+      cancel_reason: upd.rows[0].cancel_reason,
+      cancelled_by: upd.rows[0].cancelled_by,
+      cancelled_at: upd.rows[0].cancelled_at,
       cancelled_restocked_at: upd.rows[0].cancelled_restocked_at
     });
   } catch (err) {
-    console.error('CANCEL order error:', err);
     try { await client.query('ROLLBACK'); } catch {}
     return res.status(500).json({ message: 'เกิดข้อผิดพลาดในการยกเลิกออเดอร์' });
   } finally {
     client.release();
   }
 }
-/* ===================== ผู้ใช้ยกเลิก (คืนสต๊อกเสมอ) ===================== */
-app.patch('/api/orders/:id/cancel', async (req, res) => {
+// ✅ ให้ผู้ใช้ยกเลิกออเดอร์ได้
+app.patch('/api/orders/:id/cancel', _cancelOrderHandler);
+app.put('/api/orders/:id/cancel', _cancelOrderHandler); // เผื่อบางที่เรียก PUT
+
+app.patch('/api/admin/orders/:id/cancel', async (req, res) => {
   const client = await pool.connect();
   try {
     const orderId = Number(req.params.id);
-    if (!Number.isFinite(orderId)) return res.status(400).json({ message: 'invalid order id' });
+    const restock = !!req.body?.restock;
+    const reason  = (req.body?.reason || '').trim() || null;
+
+    if (!Number.isFinite(orderId)) {
+      return res.status(400).json({ message: 'invalid order id' });
+    }
 
     await client.query('BEGIN');
 
+    // โหลด order
     const oQ = await client.query(
       `SELECT id, status, cancelled_restocked_at
          FROM orders
@@ -1036,7 +1012,10 @@ app.patch('/api/orders/:id/cancel', async (req, res) => {
         FOR UPDATE`,
       [orderId]
     );
-    if (!oQ.rowCount) { await client.query('ROLLBACK'); return res.status(404).json({ message: 'ไม่พบออเดอร์' }); }
+    if (!oQ.rowCount) {
+      await client.query('ROLLBACK');
+      return res.status(404).json({ message: 'ไม่พบออเดอร์' });
+    }
     const order = oQ.rows[0];
 
     if (!['pending','ready_to_ship'].includes(order.status)) {
@@ -1044,30 +1023,38 @@ app.patch('/api/orders/:id/cancel', async (req, res) => {
       return res.status(400).json({ message: 'สถานะนี้ยกเลิกไม่ได้' });
     }
 
-    // ✅ โหลดรายการสินค้าในออเดอร์
-    const items = await _loadOrderItems(client, orderId); 
-    // ✅ คืนสต็อกสินค้าโดยใช้ await เพื่อให้แน่ใจว่าทำงานเสร็จก่อน
-    await _restockItems(client, items); 
+    // ✅ คืนสต๊อกถ้า admin เลือก restock และยังไม่เคยคืน
+    if (restock && !order.cancelled_restocked_at) {
+      const items = await _loadOrderItemsForCancel(client, orderId);
+      await _restockItems(client, items);
+    }
 
-    // ✅ อัปเดตสถานะเป็น 'cancelled'
     const upd = await client.query(
       `UPDATE orders
           SET status='cancelled',
-              cancelled_restocked_at = COALESCE(cancelled_restocked_at, NOW()),
-              updated_at = NOW()
+              cancel_reason        = COALESCE($2, cancel_reason),
+              cancelled_by         = 'admin',
+              cancelled_at         = COALESCE(cancelled_at, NOW()),
+              cancelled_restocked_at = CASE
+                WHEN $3::boolean = true AND cancelled_restocked_at IS NULL THEN NOW()
+                ELSE cancelled_restocked_at
+              END,
+              updated_at           = NOW()
         WHERE id=$1
-        RETURNING id, status, cancelled_restocked_at`,
-      [orderId]
+        RETURNING id, status, cancel_reason, cancelled_by, cancelled_at, cancelled_restocked_at`,
+      [orderId, reason, restock]
     );
 
     await client.query('COMMIT');
     return res.json({
       success: true,
       status: upd.rows[0].status,
-      cancelled_restocked_at: upd.rows[0].cancelled_restocked_at
+      cancel_reason: upd.rows[0].cancel_reason,
+      cancelled_by: upd.rows[0].cancelled_by,
+      cancelled_at: upd.rows[0].cancelled_at,
+      cancelled_restocked_at: upd.rows[0].cancelled_restocked_at,
     });
   } catch (err) {
-    console.error('PATCH /api/orders/:id/cancel error:', err);
     try { await client.query('ROLLBACK'); } catch {}
     return res.status(500).json({ message: 'เกิดข้อผิดพลาดในการยกเลิกออเดอร์' });
   } finally {
@@ -1350,20 +1337,12 @@ app.get("/api/admin/orders", async (req, res) => {
   try {
     const q = `
       SELECT
-  o.id,
-  o.order_code,
-  o.full_name,
-  o.email,
-  o.total_price,
-  o.status,
-  o.created_at,
-  o.payment_status,
-  o.slip_image,
-  o.tracking_carrier,
-  o.tracking_code,
-  u.email AS buyer_email 
-FROM orders AS o
-LEFT JOIN users AS u ON o.user_id = u.id
+  o.id, o.order_code, o.full_name, o.email, o.total_price, o.status, o.created_at,
+  o.payment_status, o.slip_image, o.tracking_carrier, o.tracking_code,
+  o.cancel_reason, o.cancelled_by, o.cancelled_at,
+  u.email AS buyer_email
+FROM orders o
+LEFT JOIN users u ON o.user_id = u.id
 ORDER BY o.created_at DESC
     `;
     const r = await pool.query(q);
@@ -1380,14 +1359,15 @@ app.get("/api/admin/orders/:id", async (req, res) => {
     const { id } = req.params;
     const ordQ = `
       SELECT id, order_code, user_id, email,
-             full_name, phone, address_line, district,subdistrict, province, postcode,
-             shipping_method, payment_method,
-             subtotal, shipping, total_price, total_qty, note,
-             status, created_at,
-             payment_status, paid_at, payment_amount, slip_image,
-             tracking_carrier, tracking_code 
-      FROM orders
-      WHERE id = $1
+       full_name, phone, address_line, district, subdistrict, province, postcode,
+       shipping_method, payment_method,
+       subtotal, shipping, total_price, total_qty, note,
+       status, created_at,
+       payment_status, paid_at, payment_amount, slip_image,
+       tracking_carrier, tracking_code,
+       cancel_reason, cancelled_by, cancelled_at
+FROM orders
+WHERE id = $1
     `;
     const ordR = await pool.query(ordQ, [id]);
     if (ordR.rowCount === 0) return res.status(404).json({ message: "ไม่พบออเดอร์" });
@@ -1453,23 +1433,47 @@ app.patch("/api/admin/orders/:id/status", async (req, res) => {
   }
 });
 
-// ============================= 4) ลูกค้าอัปโหลดสลิป =============================
-app.post('/api/orders/:id/upload-slip', slipUpload.single('file'), async (req, res) => {
+app.post('/api/orders/:id/upload-slip', slipUpload, async (req, res) => {
   try {
     const { id } = req.params;
+    // ดึงจาก body ให้ชัดเจน
     const { txid, amount } = req.body || {};
-    const img = req.file ? `/uploads/slips/${req.file.filename}` : null; // << path ใหม่
-    if (!img) return res.status(400).json({ message: 'กรุณาแนบสลิป' });
 
+    const f = req.files?.image?.[0] || req.files?.file?.[0];
+    if (!f) return res.status(400).json({ message: 'กรุณาแนบสลิป' });
+
+    const filename = `slip_${Date.now()}_${Math.random().toString(36).slice(2,7)}.webp`;
+    const outPath  = path.join(slipDir, filename);
+
+    await sharp(f.buffer)
+      .rotate()
+      .resize(1200, 1200, { fit: 'inside', withoutEnlargement: true })
+      .webp({ quality: 80 })
+      .toFile(outPath);
+
+    const img = `/uploads/slips/${filename}`;
+
+    // ✅ ใช้ txid, amount ที่มาจาก req.body
     const q = `
       UPDATE orders
-      SET slip_image=$1, payment_txid=$2, payment_amount=$3, payment_status='submitted'
-      WHERE id=$4
-      RETURNING id, payment_status, slip_image, payment_amount, payment_txid
+         SET slip_image=$1,
+             payment_txid=COALESCE($2, payment_txid),
+             payment_amount=COALESCE($3, payment_amount),
+             payment_status='submitted',
+             updated_at=NOW()
+       WHERE id=$4
+       RETURNING id, order_code, payment_status, slip_image, payment_amount, payment_txid
     `;
-    const r = await pool.query(q, [img, txid || null, amount ? Number(amount) : null, id]);
-    if (r.rowCount === 0) return res.status(404).json({ message: 'ไม่พบออเดอร์' });
+    const r = await pool.query(q, [
+      img,
+      txid || null,
+      amount ? Number(amount) : null,
+      id
+    ]);
+
+    if (!r.rowCount) return res.status(404).json({ message: 'ไม่พบออเดอร์' });
     res.json(r.rows[0]);
+
   } catch (e) {
     console.error('upload-slip error', e);
     res.status(500).json({ message: 'อัปโหลดสลิปไม่สำเร็จ' });
@@ -1519,50 +1523,6 @@ app.patch('/api/admin/orders/:id/reject-slip', async (req, res) => {
   }
 });
 
-// ============================= 7) ยกเลิกออเดอร์ (คืนสต็อกได้) =============================
-app.patch('/api/admin/orders/:id/cancel', async (req, res) => {
-  const { id } = req.params;
-  const { restock } = req.body || {};
-  const client = await pool.connect();
-  try {
-    await client.query('BEGIN');
-
-    const ord = await client.query(
-      `SELECT id, status FROM orders WHERE id=$1 FOR UPDATE`, [id]
-    );
-    if (ord.rowCount === 0) {
-      await client.query('ROLLBACK'); return res.status(404).json({ message: 'ไม่พบออเดอร์' });
-    }
-    const cur = ord.rows[0].status;
-    if (['shipped','done'].includes(cur)) {
-      await client.query('ROLLBACK'); return res.status(400).json({ message: 'ออเดอร์สถานะนี้ยกเลิกไม่ได้' });
-    }
-
-    if (restock) {
-      const items = await client.query(
-        `SELECT product_id, quantity FROM order_items WHERE order_id=$1`, [id]
-      );
-      for (const it of items.rows) {
-        await client.query(
-          `UPDATE products SET stock = stock + $1, updated_at = NOW() WHERE id=$2`,
-          [it.quantity, it.product_id]
-        );
-      }
-    }
-
-    const r = await client.query(
-      `UPDATE orders SET status='cancelled' WHERE id=$1 RETURNING id, status`, [id]
-    );
-    await client.query('COMMIT');
-    res.json(r.rows[0]);
-  } catch (e) {
-    await client.query('ROLLBACK');
-    console.error('cancel order error', e);
-    res.status(500).json({ message: 'ยกเลิกออเดอร์ไม่สำเร็จ' });
-  } finally {
-    client.release();
-  }
-});
 
 app.patch("/api/admin/orders/:id/tracking", async (req, res) => {
   try {
@@ -1604,84 +1564,77 @@ app.patch("/api/admin/orders/:id/tracking", async (req, res) => {
   }
 });
 
-// =================== 9) ดึงออเดอร์ของ user (รวม items + tracking + address) ===================
 app.get('/api/my-orders', async (req, res) => {
-  const userId = req.query.userId || req.query.buyer_id || null;
-  const email  = req.query.email  || null;
-  if (!userId && !email) return res.status(400).json({ message: 'missing userId or email' });
+  let userId = req.query.userId;
+  let email  = req.query.email;
+
+  // บังคับให้เป็น null ถ้าไม่ใช่ตัวเลข
+  userId = userId && !isNaN(userId) ? Number(userId) : null;
+  email  = email && String(email).trim() !== '' ? String(email).trim() : null;
+
+  if (!userId && !email) {
+    return res.status(400).json({ message: 'ต้องส่ง userId หรือ email อย่างน้อยหนึ่งค่า' });
+  }
 
   try {
-    const o = await pool.query(
+    const head = await pool.query(
       `
-      SELECT
-        o.id                 AS order_id,
-        o.order_code         AS order_code,
-        o.created_at         AS order_date,
-        o.status             AS status,
-        o.total_price        AS total_amount,
-        o.payment_method     AS payment_method,
-        o.payment_status     AS payment_status,
-        o.slip_image         AS slip_image,
-        o.payment_amount     AS payment_amount,
-        o.tracking_carrier   AS carrier,
-        o.tracking_code      AS tracking_code,
-
-        /* ===== ผู้รับ & ที่อยู่จากตาราง orders ===== */
-        o.full_name          AS receiver_name,
-        o.phone              AS receiver_phone,
-        o.address_line       AS address_line,
-        o.subdistrict        AS subdistrict,
-        o.district           AS district,
-        o.province           AS province,
-        o.postcode           AS postcode,
-
-        /* จำนวนชิ้นในออเดอร์ */
-        COALESCE((
-          SELECT SUM(oi.quantity)::int
-          FROM order_items oi
-          WHERE oi.order_id = o.id
-        ), 0)                AS total_items
+      SELECT o.id AS order_id, o.order_code, o.created_at AS order_date,
+             o.status, o.total_price AS total_amount,
+             o.payment_method, o.payment_status, o.slip_image, o.payment_amount,
+             o.tracking_carrier AS carrier, o.tracking_code,
+             o.full_name AS receiver_name, o.phone AS receiver_phone,
+             o.address_line, o.subdistrict, o.district, o.province, o.postcode,
+             o.cancel_reason, o.cancelled_by, o.cancelled_at,
+             COALESCE((SELECT SUM(oi.quantity)::int FROM order_items oi WHERE oi.order_id=o.id),0) AS total_items
       FROM orders o
-      WHERE ($1::int IS NOT NULL AND o.user_id = $1)
-         OR ($1::int IS NULL AND $2::text IS NOT NULL AND o.email = $2)
+      WHERE ($1::int IS NOT NULL AND o.user_id=$1)
+         OR ($1::int IS NULL AND $2::text IS NOT NULL AND o.email=$2)
       ORDER BY o.created_at DESC
       `,
-      [userId ? Number(userId) : null, email]
+      [userId, email]
     );
 
-    const orderIds = o.rows.map(r => r.order_id);
+    const orderIds = head.rows.map(r => r.order_id);
     if (orderIds.length === 0) return res.json([]);
 
-    const it = await pool.query(
-      `
-      SELECT
-        id             AS order_detail_id,
-        order_id       AS order_id,
-        product_id     AS product_id,
-        name           AS item_name,
-        image          AS item_image,
-        size           AS size,
-        unit_price     AS unit_price,
-        price_per_unit AS price_per_unit,
-        quantity       AS quantity,
-        line_total     AS line_total
-      FROM order_items
-      WHERE order_id = ANY($1)
-      ORDER BY id ASC
-      `,
+    const items = await pool.query(
+      `SELECT oi.id AS order_item_id, oi.order_id, oi.product_id, oi.name AS item_name,
+              oi.image AS oi_image, p.image AS product_image,
+              oi.size, oi.unit_price, oi.price_per_unit, oi.quantity, oi.line_total
+       FROM order_items oi
+       LEFT JOIN products p ON p.id=oi.product_id
+       WHERE oi.order_id = ANY($1)
+       ORDER BY oi.id ASC`,
       [orderIds]
     );
 
-    const map = new Map(orderIds.map(id => [id, []]));
-    for (const row of it.rows) map.get(row.order_id)?.push(row);
+    const normalizeImage = (raw) => {
+      if (!raw) return null;
+      let s = String(raw).trim().replace(/\\/g, '/');
+      if (/^https?:\/\//i.test(s)) return s;
+      if (s.startsWith('/uploads/')) return s;
+      return '/uploads/' + s.replace(/^\/+/, '');
+    };
 
-    const out = o.rows.map(ord => ({ ...ord, items: map.get(ord.order_id) || [] }));
+    const map = new Map(orderIds.map(id => [String(id), []]));
+    for (const r of items.rows) {
+      const img = normalizeImage(r.oi_image || r.product_image);
+      map.get(String(r.order_id))?.push({ ...r, item_image: img });
+    }
+
+    const out = head.rows.map(ord => ({
+      ...ord,
+      items: map.get(String(ord.order_id)) || []
+    }));
+
     res.json(out);
   } catch (e) {
     console.error('GET /api/my-orders error', e);
     res.status(500).json({ message: 'Server error' });
   }
 });
+
 // === ช่วยอ่านช่วงวัน ===
 function range(req) {
   const from = req.query.from || '2000-01-01';
@@ -1763,32 +1716,59 @@ app.get('/api/admin/metrics/sales-by-day', async (req, res) => {
 });
 
 // 3) TOP PRODUCTS
-// GET /api/admin/metrics/top-products?limit=5
+
 app.get('/api/admin/metrics/top-products', async (req, res) => {
   try {
     const [from, to] = range(req);
     const limit = Math.min(parseInt(req.query.limit || '5', 10), 50);
 
+    const ORIGIN =
+      process.env.PUBLIC_ORIGIN || `${req.protocol}://${req.get('host')}`;
+
+    const buildImageUrl = (u) => {
+      if (!u) return null;
+      if (/^https?:\/\//i.test(u)) return u;
+      if (u.startsWith('/'))        return `${ORIGIN}${u}`;
+      if (u.startsWith('uploads/')) return `${ORIGIN}/${u}`;
+      return `${ORIGIN}/uploads/${u}`;
+    };
+
     const { rows } = await pool.query(
-      `SELECT p.id, p.name,
-              SUM(oi.quantity)::int                 AS qty_sold,
-              SUM(${LINE_EXPR})                     AS revenue
-         FROM orders o
-         JOIN order_items oi ON oi.order_id = o.id
-         JOIN products     p ON p.id = oi.product_id
-        WHERE o.status IN ${PAID_STATUSES}
-          AND o.created_at::date BETWEEN $1::date AND $2::date
-        GROUP BY p.id, p.name
-        ORDER BY qty_sold DESC
-        LIMIT $3`,
+      `
+      SELECT
+        p.id,
+        p.name,
+        MIN(NULLIF(oi.image, ''))                AS image_any,  -- ✅ ใช้เฉพาะ oi.image
+        SUM(oi.quantity)::int                    AS qty_sold,
+        SUM(${LINE_EXPR})                        AS revenue
+      FROM orders o
+      JOIN order_items oi ON oi.order_id = o.id
+      JOIN products     p ON p.id = oi.product_id
+      WHERE o.status IN ${PAID_STATUSES}
+        AND o.created_at::date BETWEEN $1::date AND $2::date
+      GROUP BY p.id, p.name
+      ORDER BY qty_sold DESC NULLS LAST
+      LIMIT $3
+      `,
       [from, to, limit]
     );
-    res.json(rows);
+
+    const data = rows.map(r => ({
+      id: r.id,
+      name: r.name,
+      qty_sold: Number(r.qty_sold || 0),
+      revenue: Number(r.revenue || 0),
+      image_url: buildImageUrl(r.image_any),
+    }));
+
+    res.json(data);
   } catch (e) {
     console.error('metrics/top-products error:', e);
     res.status(500).json({ message: 'Server error: top-products' });
   }
 });
+
+
 // GET /api/admin/metrics/category-breakdown
 app.get('/api/admin/metrics/category-breakdown', async (req, res) => {
   try {
@@ -1818,11 +1798,14 @@ app.get('/api/admin/metrics/category-breakdown', async (req, res) => {
   }
 });
 
-// 5) RECENT ORDERS (10 ออเดอร์ล่าสุด + รายการสินค้า) — ใช้ p.price
+// 5) RECENT ORDERS (10 ออเดอร์ล่าสุด + รายการสินค้า) — แนบรูปสินค้าให้ด้วย
 app.get('/api/admin/metrics/recent-orders', async (req, res) => {
   try {
     const [from, to] = range(req);
     const limit = Math.min(parseInt(req.query.limit || '10', 10), 50);
+
+    // base URL สำหรับประกอบลิงก์รูป (รองรับโปรโตคอล/พอร์ตปัจจุบัน)
+    const baseUrl = `${req.protocol}://${req.get('host')}`;
 
     const { rows } = await pool.query(
       `
@@ -1830,7 +1813,7 @@ app.get('/api/admin/metrics/recent-orders', async (req, res) => {
         SELECT
           o.id,
           o.user_id,
-          COALESCE(o.paid_at, o.created_at) AS order_time,   -- ตัด updated_at ออกเพื่อกันพัง
+          COALESCE(o.paid_at, o.created_at) AS order_time,
           o.status,
           COALESCE(o.shipping_method, '') AS shipping_method
         FROM orders o
@@ -1846,8 +1829,11 @@ app.get('/api/admin/metrics/recent-orders', async (req, res) => {
           p.name AS product_name,
           c.name AS category_name,
           oi.quantity,
-          COALESCE(p.price, 0)::numeric AS unit_price,        -- ✅ ใช้ราคาจาก products
-          (oi.quantity * COALESCE(p.price, 0))::numeric AS line_total
+          COALESCE(p.price, 0)::numeric AS unit_price,
+          (oi.quantity * COALESCE(p.price, 0))::numeric AS line_total,
+
+          /* รูปจาก order_items ถ้าไม่มีค่อย fallback เป็นรูปใน products */
+          COALESCE(NULLIF(oi.image, ''), NULLIF(p.image, '')) AS image_raw
         FROM order_items oi
         JOIN products p     ON p.id = oi.product_id
    LEFT JOIN categories c   ON c.id = p.category_id
@@ -1865,12 +1851,21 @@ app.get('/api/admin/metrics/recent-orders', async (req, res) => {
         (
           SELECT COALESCE(json_agg(
             json_build_object(
-              'product_id',   i.product_id,
-              'product_name', i.product_name,
-              'category_name',COALESCE(i.category_name, 'ไม่ระบุ'),
-              'quantity',     i.quantity,
-              'unit_price',   i.unit_price,
-              'line_total',   i.line_total
+              'product_id',    i.product_id,
+              'product_name',  i.product_name,
+              'category_name', COALESCE(i.category_name, 'ไม่ระบุ'),
+              'quantity',      i.quantity,
+              'unit_price',    i.unit_price,
+              'line_total',    i.line_total,
+              /* ส่งทั้งชื่อไฟล์ดิบและ URL พร้อมใช้ */
+              'image',         i.image_raw,
+              'image_url',
+  CASE
+    WHEN i.image_raw IS NULL OR i.image_raw = '' THEN NULL
+    WHEN i.image_raw ~ '^https?://' THEN i.image_raw
+    WHEN i.image_raw LIKE '/%' THEN $4 || i.image_raw      -- '/uploads/xxx.jpg'
+    ELSE $4 || '/uploads/' || i.image_raw                  -- 'xxx.jpg' หรือ 'uploads/xxx.jpg'
+  END
             )
             ORDER BY i.product_name
           ), '[]'::json)
@@ -1881,7 +1876,7 @@ app.get('/api/admin/metrics/recent-orders', async (req, res) => {
       JOIN users u ON u.id = o.user_id
       ORDER BY o.order_time DESC NULLS LAST
       `,
-      [from, to, limit]
+      [from, to, limit, baseUrl]
     );
 
     res.json(rows);

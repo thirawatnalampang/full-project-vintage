@@ -1,22 +1,27 @@
 // src/pages/admin/AdminPage.jsx
 import React, {  useEffect, useMemo, useState } from "react";
-import { Link, useNavigate } from "react-router-dom";
+import { Link, useNavigate,useLocation } from "react-router-dom";
 import { useAuth } from "../../context/AuthContext";
 import {
   FaTshirt, FaShoppingBag, FaUsers,
   FaPlus, FaSearch, FaEdit, FaTrash, FaSave, FaTimes, FaHome,
-  FaChartLine, FaBars,   // ⬅️ เพิ่ม FaBars
+  FaChartLine, FaBars, FaShoppingCart, FaClipboardList, FaUserShield
 } from "react-icons/fa";
+
+
 import {
   LineChart, Line, XAxis, YAxis, Tooltip, CartesianGrid, ResponsiveContainer,
   BarChart, Bar, PieChart, Pie, Cell, Legend,
 } from "recharts";
+
+
 
 const API = {
   products: "http://localhost:3000/api/admin/products",
   categories: "http://localhost:3000/api/admin/categories",
   metrics: "http://localhost:3000/api/admin/metrics",
 };
+
 
 function classNames(...arr) { return arr.filter(Boolean).join(" "); }
 function numberFormat(n) {
@@ -108,6 +113,7 @@ function Sidebar({ active, onChange, isOpen, onClose }) {
     </>
   );
 }
+
 /* -------------------- ProductsPanel -------------------- */
 function ProductsPanel() {
   const [list, setList] = useState([]);
@@ -116,51 +122,107 @@ function ProductsPanel() {
   const [q, setQ] = useState("");
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [editing, setEditing] = useState(null);
-  const [file, setFile] = useState(null);
-  const [preview, setPreview] = useState("");
 
-  // ====== ขนาด (อก/ยาว) ======
-  const [measureRows, setMeasureRows] = useState([]); // [{chest, length, stock}]
+  // รูปภาพ
+  const [coverFile, setCoverFile] = useState(null);        // ปก (ไฟล์ใหม่)
+  const [galleryFiles, setGalleryFiles] = useState([]);    // แกลเลอรี (ไฟล์ใหม่หลายไฟล์)
+  const [galleryKeep, setGalleryKeep] = useState([]);      // path รูปเก่าที่ “จะเก็บไว้”
+  const [previewCover, setPreviewCover] = useState("");    // url พรีวิวปก
+// ====== ขนาด (อก/ยาว) ======
+const [measureRows, setMeasureRows] = useState([]); // [{ chest: "28.5", length: "27", stock: 3 }]
 
-  const addMeasureRow = () => {
-    setMeasureRows((rows) => [...rows, { chest: "", length: "", stock: 0 }]);
-  };
-  const updateMeasureRow = (idx, key, val) => {
-    setMeasureRows((rows) =>
-      rows.map((r, i) => (i === idx ? { ...r, [key]: val } : r))
-    );
-  };
-  const removeMeasureRow = (idx) => {
-    setMeasureRows((rows) => rows.filter((_, i) => i !== idx));
-  };
+// กัน e/E/+/- และ scroll เปลี่ยนค่าโดยไม่ตั้งใจ
+const blockInvalidKeys = (e) => {
+  const bad = ["e", "E", "+", "-"];
+  if (bad.includes(e.key)) e.preventDefault();
+};
+const noWheelChange = (e) => e.currentTarget.blur();
 
-  const sumStockFromMeasures = useMemo(
-    () => measureRows.reduce((a, b) => a + Number(b.stock || 0), 0),
-    [measureRows]
-  );
+// ✅ เก็บเป็น "ข้อความ" ระหว่างพิมพ์ แต่จำกัดรูปแบบให้ถูกต้อง
+// - อนุญาตเฉพาะตัวเลขและจุด
+// - มีจุดทศนิยมได้ 1 จุด
+// - ทศนิยมไม่เกิน 2 ตำแหน่ง
+const sanitizeDecimalStr = (v, maxDecimals = 2) => {
+  let s = String(v ?? "");
+  s = s.replace(/[^0-9.]/g, "");              // ตัดอักขระที่ไม่ใช่เลข/จุด
+  const parts = s.split(".");
+  if (parts.length > 2) {
+    s = parts[0] + "." + parts.slice(1).join(""); // รวมจุดส่วนเกิน
+  }
+  let [intPart, decPart] = s.split(".");
+  intPart = (intPart || "").replace(/^0+(?=\d)/, ""); // ลบ 0 นำหน้า (คง "0" ได้)
+  if (decPart !== undefined) decPart = decPart.slice(0, maxDecimals);
+  return decPart !== undefined ? `${intPart}.${decPart}` : intPart;
+};
 
-  const parseMeasureVariants = (raw) => {
+// ✅ สำหรับ stock: จำนวนเต็ม ≥ 0 (เก็บเป็น string เพื่อให้พิมพ์สะดวก)
+const sanitizeIntStr = (v) => {
+  const s = String(v ?? "").replace(/[^\d]/g, "");
+  return s.replace(/^0+(?=\d)/, ""); // ลบ 0 นำหน้า
+};
+
+// ===== helpers กันไฟล์ซ้ำ =====
+const isSameFile = (a, b) =>
+  a.name === b.name && a.size === b.size && a.lastModified === b.lastModified;
+
+const mergeUniqueFiles = (oldArr, newArr) => {
+  const out = [...oldArr];
+  newArr.forEach((nf) => {
+    if (!out.some((of) => isSameFile(of, nf))) out.push(nf);
+  });
+  return out;
+};
+// แปลงตอน "คำนวณ/บันทึก"
+const toFloat = (s) => {
+  const n = parseFloat(String(s || "").replace(",", "."));
+  return Number.isFinite(n) ? n : 0;
+};
+const toInt = (s) => {
+  const n = parseInt(String(s || ""), 10);
+  return Number.isFinite(n) ? Math.max(0, n) : 0;
+};
+
+const addMeasureRow = () =>
+  setMeasureRows((rows) => [...rows, { chest: "", length: "", stock: "" }]);
+
+const updateMeasureRow = (idx, key, val) =>
+  setMeasureRows((rows) => rows.map((r, i) => (i === idx ? { ...r, [key]: val } : r)));
+
+const removeMeasureRow = (idx) =>
+  setMeasureRows((rows) => rows.filter((_, i) => i !== idx));
+
+// รวมสต็อก (ตอนโชว์)
+const sumStockFromMeasures = useMemo(
+  () => measureRows.reduce((a, b) => a + toInt(b.stock), 0),
+  [measureRows]
+);
+
+// 👇 ถ้าโหลดจาก DB มาก่อน ให้ map เป็น string เพื่อแก้จุดหายตอนแก้ไข
+const parseMeasureVariants = (raw) => {
   let mv = raw?.measure_variants ?? raw?.measureVariants ?? null;
   if (!mv) return [];
   if (typeof mv === "string") {
     try { mv = JSON.parse(mv); } catch { mv = []; }
   }
   if (!Array.isArray(mv)) return [];
-  return mv.map((v) => {
-    const chest  = Number(v?.chest_in  ?? v?.chest_cm  ?? v?.chest  ?? "");
-    const length = Number(v?.length_in ?? v?.length_cm ?? v?.length ?? "");
-    const stock  = Number(v?.stock ?? 0);
-    return { chest, length, stock };
-  }).filter((r) => Number.isFinite(r.chest) && Number.isFinite(r.length));
+  return mv
+    .map((v) => ({
+      chest:  (v?.chest_in  ?? v?.chest_cm  ?? v?.chest  ?? "").toString(),
+      length: (v?.length_in ?? v?.length_cm ?? v?.length ?? "").toString(),
+      stock:  (v?.stock ?? "").toString(),
+    }))
+    .filter((r) => r.chest !== "" && r.length !== "");
 };
+
   // ====== ค้นหา/กรอง ======
   const filtered = useMemo(() => {
     const kw = q.toLowerCase().trim();
     let items = Array.isArray(list) ? list : [];
     if (kw) {
-      items = items.filter((i) =>
-        (i.name || "").toLowerCase().includes(kw) ||
-        (i.description || "").toLowerCase().includes(kw)
+      items = items.filter(
+        (i) =>
+          (i.name || "").toLowerCase().includes(kw) ||
+          (i.description || "").toLowerCase().includes(kw)
       );
     }
     return items;
@@ -196,83 +258,104 @@ function ProductsPanel() {
 
   // ====== ฟอร์ม ======
   function openCreate() {
-    setEditing({ id: null, name: "", price: 0, category_id: "", description: "", stock: 0, image: "" });
-    setFile(null);
-    setPreview("");
-    setMeasureRows([]); // เคลียร์ตาราง อก/ยาว
+    setEditing({
+      id: null,
+      name: "",
+      price: 0,
+      category_id: "",
+      description: "",
+      stock: 0,
+      image: "",
+      images_json: "[]",
+    });
+    setCoverFile(null);
+    setGalleryFiles([]);
+    setGalleryKeep([]);
+    setPreviewCover("");
+    setMeasureRows([]);
     setDrawerOpen(true);
   }
+
   function openEdit(row) {
+    const arr = (() => {
+      try { return JSON.parse(row.images_json || "[]"); }
+      catch { return []; }
+    })();
     setEditing({ ...row });
-    setFile(null);
-    setPreview(row.image ? `http://localhost:3000${row.image}` : "");
-    setMeasureRows(parseMeasureVariants(row)); // โหลดตาราง อก/ยาว
+    setCoverFile(null);
+    setGalleryFiles([]);
+    setGalleryKeep(arr); // เก็บรูปเก่าไว้ทั้งหมดก่อน
+    setPreviewCover(row.image ? `http://localhost:3000${row.image}` : "");
+    setMeasureRows(parseMeasureVariants(row));
     setDrawerOpen(true);
   }
+
   function closeDrawer() {
     setDrawerOpen(false);
     setEditing(null);
-    setFile(null);
-    setPreview("");
+    setCoverFile(null);
+    setGalleryFiles([]);
+    setGalleryKeep([]);
+    setPreviewCover("");
     setMeasureRows([]);
   }
-async function save() {
-  if (!editing) return;
-  if (!editing.name?.trim()) return alert("กรุณากรอกชื่อสินค้า");
 
-  const formData = new FormData();
-  formData.append("name", editing.name);
-  formData.append("price", editing.price ?? 0);
+  async function save() {
+    if (!editing) return;
+    if (!editing.name?.trim()) return alert("กรุณากรอกชื่อสินค้า");
 
-  // ✅ สร้าง array นิ้ว
-  const cleaned = measureRows
-    .filter(r => r.chest !== "" && r.length !== "")
-    .map(r => ({
-      chest_in:  Number(r.chest),
-      length_in: Number(r.length),
-      stock:     Number(r.stock || 0),
-    }));
+    const formData = new FormData();
+    formData.append("name", editing.name);
+    formData.append("price", editing.price ?? 0);
 
-  // ✅ ส่ง measureVariants "เสมอ" (อย่างน้อยเป็น [])
-  formData.append("measureVariants", JSON.stringify(cleaned));
-  const totalFromMeasures = cleaned.reduce((a, b) => a + Number(b.stock || 0), 0);
-  formData.append("stock", totalFromMeasures); // ไม่มีแถว = 0
+    const cleaned = measureRows
+  .filter((r) => r.chest !== "" && r.length !== "")
+  .map((r) => ({
+    chest_in:  toFloat(r.chest),
+    length_in: toFloat(r.length),
+    stock:     toInt(r.stock),
+  }));
 
-  if (editing.category_id) formData.append("category_id", editing.category_id);
-  if (editing.description) formData.append("description", editing.description);
-  if (file) formData.append("image", file);
-  else if (editing.image) formData.append("oldImage", editing.image);
+formData.append("measureVariants", JSON.stringify(cleaned));
+formData.append(
+  "stock",
+  cleaned.reduce((a, b) => a + (b.stock || 0), 0)
+);
 
-  const method = editing.id ? "PUT" : "POST";
-  const url = editing.id ? `${API.products}/${editing.id}` : API.products;
+    if (editing.category_id) formData.append("category_id", editing.category_id);
+    if (editing.description) formData.append("description", editing.description);
 
-  try {
-    const res = await fetch(url, { method, body: formData });
-    const data = await res.json();
-    if (!res.ok || !data.success) {
-      console.error("save failed:", data);
-      return alert(data?.message || "บันทึกไม่สำเร็จ");
+    // ปก
+    if (coverFile) formData.append("image", coverFile);
+    else if (editing.image) formData.append("oldImage", editing.image);
+
+    // แกลเลอรี
+    formData.append("keepImages", JSON.stringify(galleryKeep));
+    galleryFiles.forEach((f) => formData.append("images", f));
+
+    const method = editing.id ? "PUT" : "POST";
+    const url = editing.id ? `${API.products}/${editing.id}` : API.products;
+
+    try {
+      const res = await fetch(url, { method, body: formData });
+      const data = await res.json();
+      if (!res.ok || !data.success) {
+        console.error("save failed:", data);
+        return alert(data?.message || "บันทึกไม่สำเร็จ");
+      }
+      await loadProducts();
+      closeDrawer();
+    } catch (err) {
+      console.error("save error:", err);
+      alert("เกิดข้อผิดพลาดในการเชื่อมต่อเซิร์ฟเวอร์");
     }
-    await loadProducts();
-    closeDrawer();
-  } catch (err) {
-    console.error("save error:", err);
-    alert("เกิดข้อผิดพลาดในการเชื่อมต่อเซิร์ฟเวอร์");
   }
-}
 
   async function remove(id) {
     if (!window.confirm("ลบสินค้านี้หรือไม่?")) return;
     const res = await fetch(`${API.products}/${id}`, { method: "DELETE" });
     if (!res.ok) return alert("ลบไม่สำเร็จ");
     await loadProducts();
-  }
-
-  function onFileChange(e) {
-    const f = e.target.files?.[0];
-    setFile(f || null);
-    if (f) setPreview(URL.createObjectURL(f));
-    else setPreview("");
   }
 
   return (
@@ -417,15 +500,104 @@ async function save() {
                 />
               </div>
 
+              {/* รูปหน้าปก (1 รูป) */}
               <div>
-                <label className="block text-sm text-neutral-400 mb-1">รูปภาพสินค้า (อัปโหลดไฟล์)</label>
-                <input type="file" accept="image/*" onChange={onFileChange} className="w-full text-neutral-300" />
-                {(preview || editing?.image) && (
+                <label className="block text-sm text-neutral-400 mb-1">รูปหน้าปก</label>
+                <input
+                  type="file"
+                  accept="image/*"
+                  onChange={(e) => {
+                    const f = e.target.files?.[0] || null;
+                    setCoverFile(f);
+                    setPreviewCover(
+                      f
+                        ? URL.createObjectURL(f)
+                        : editing?.image
+                        ? `http://localhost:3000${editing.image}`
+                        : ""
+                    );
+                  }}
+                  className="w-full text-neutral-300"
+                />
+                {previewCover && (
                   <img
-                    src={preview || (editing.image ? `http://localhost:3000${editing.image}` : "")}
-                    alt="preview"
+                    src={previewCover}
+                    alt="cover"
                     className="mt-3 w-36 h-36 object-cover rounded-xl border border-neutral-800"
                   />
+                )}
+              </div>
+
+              {/* แกลเลอรี (หลายรูป) */}
+              <div className="mt-4">
+                <label className="block text-sm text-neutral-400 mb-1">แกลเลอรี (อัปโหลดได้หลายรูป)</label>
+               <input
+  type="file"
+  accept="image/*"
+  multiple
+  onChange={(e) => {
+    const picked = Array.from(e.target.files || []);
+    // ✅ ต่อท้าย + กันซ้ำ
+    setGalleryFiles((prev) => mergeUniqueFiles(prev, picked));
+    // ✅ รีเซ็ตค่า input เพื่อให้เลือกไฟล์ชุดเดิมซ้ำได้ (เช่น ลืมเลือกครบ)
+    e.target.value = "";
+  }}
+  className="w-full text-neutral-300"
+/>
+
+                {/* แสดงรูปเก่า (กดลบ = เอาออกจาก keep) */}
+                {galleryKeep.length > 0 && (
+                  <div className="mt-3">
+                    <div className="text-xs text-neutral-400 mb-1">รูปเก่า</div>
+                    <div className="grid grid-cols-3 sm:grid-cols-4 gap-3">
+                      {galleryKeep.map((p, idx) => (
+                        <div key={`old-${idx}`} className="relative">
+                          <img
+                            src={`http://localhost:3000${p}`}
+                            alt=""
+                            className="w-24 h-24 object-cover rounded-lg border border-neutral-800"
+                          />
+                          <button
+                            type="button"
+                            onClick={() => setGalleryKeep((arr) => arr.filter((x) => x !== p))}
+                            className="absolute -top-2 -right-2 px-2 py-1 text-xs rounded bg-rose-600 text-white"
+                          >
+                            ลบ
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {/* แสดงรูปใหม่ (กดลบ = เอาออกจาก files) */}
+                {galleryFiles.length > 0 && (
+                  <div className="mt-3">
+                    <div className="text-xs text-neutral-400 mb-1">รูปใหม่</div>
+                    <div className="grid grid-cols-3 sm:grid-cols-4 gap-3">
+                      {galleryFiles.map((f, idx) => {
+                        const url = URL.createObjectURL(f);
+                        return (
+                          <div key={`new-${idx}`} className="relative">
+                            <img
+                              src={url}
+                              alt=""
+                              className="w-24 h-24 object-cover rounded-lg border border-neutral-800"
+                            />
+                            <button
+                              type="button"
+                              onClick={() =>
+                                setGalleryFiles((files) => files.filter((_, i) => i !== idx))
+                              }
+                              className="absolute -top-2 -right-2 px-2 py-1 text-xs rounded bg-rose-600 text-white"
+                            >
+                              ลบ
+                            </button>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
                 )}
               </div>
 
@@ -434,7 +606,8 @@ async function save() {
                 <div className="flex items-center justify-between">
                   <label className="block text-sm text-neutral-400 mb-1">ขนาด (อก/ยาว)</label>
                   <div className="text-xs text-neutral-400">
-                    สต็อกรวมจากตารางนี้: <span className="text-white font-semibold">{sumStockFromMeasures}</span> ชิ้น
+                    สต็อกรวมจากตารางนี้:{" "}
+                    <span className="text-white font-semibold">{sumStockFromMeasures}</span> ชิ้น
                   </div>
                 </div>
 
@@ -448,54 +621,71 @@ async function save() {
                         <th className="px-3 py-2 text-right">จัดการ</th>
                       </tr>
                     </thead>
-                    <tbody className="divide-y divide-neutral-800 bg-neutral-900">
-                      {measureRows.length === 0 ? (
-                        <tr>
-                          <td colSpan={4} className="px-3 py-4 text-center text-neutral-500">
-                            ยังไม่มีแถว กด “เพิ่มแถว” เพื่อเริ่มต้น
-                          </td>
-                        </tr>
-                      ) : (
-                        measureRows.map((r, idx) => (
-                          <tr key={idx}>
-                            <td className="px-3 py-2">
-                              <input
-                                type="number" step="0.1"
-                                value={r.chest}
-                                onChange={(e) => updateMeasureRow(idx, "chest", e.target.value)}
-                                placeholder=""
-                                className="w-28 bg-neutral-900 border border-neutral-700 rounded-lg px-2 py-1.5 text-white"
-                              />
-                            </td>
-                            <td className="px-3 py-2">
-                              <input
-                                type="number" step="0.1"
-                                value={r.length}
-                                onChange={(e) => updateMeasureRow(idx, "length", e.target.value)}
-                                placeholder=""
-                                className="w-28 bg-neutral-900 border border-neutral-700 rounded-lg px-2 py-1.5 text-white"
-                              />
-                            </td>
-                            <td className="px-3 py-2">
-                              <input
-                                type="number"
-                                value={r.stock}
-                                onChange={(e) => updateMeasureRow(idx, "stock", e.target.value)}
-                                className="w-24 bg-neutral-900 border border-neutral-700 rounded-lg px-2 py-1.5 text-white"
-                              />
-                            </td>
-                            <td className="px-3 py-2 text-right">
-                              <button
-                                onClick={() => removeMeasureRow(idx)}
-                                className="px-3 py-1.5 rounded-lg bg-red-600/90 hover:bg-red-600 text-white"
-                              >
-                                ลบ
-                              </button>
-                            </td>
-                          </tr>
-                        ))
-                      )}
-                    </tbody>
+                   <tbody className="divide-y divide-neutral-800 bg-neutral-900">
+  {measureRows.length === 0 ? (
+    <tr>
+      <td colSpan={4} className="px-3 py-4 text-center text-neutral-500">
+        ยังไม่มีแถว กด “เพิ่มแถว” เพื่อเริ่มต้น
+      </td>
+    </tr>
+  ) : (
+    measureRows.map((r, idx) => (
+      <tr key={idx}>
+{/* อก (ทศนิยมได้) */}
+<td className="px-3 py-2">
+  <input
+    type="text"
+    inputMode="decimal"
+    placeholder=""
+    value={r.chest}
+    onChange={(e) => updateMeasureRow(idx, "chest", sanitizeDecimalStr(e.target.value, 2))}
+    onKeyDown={blockInvalidKeys}
+    onWheel={noWheelChange}
+    className="w-28 bg-neutral-900 border border-neutral-700 rounded-lg px-2 py-1.5 text-white text-right"
+  />
+</td>
+
+{/* ยาว (ทศนิยมได้) */}
+<td className="px-3 py-2">
+  <input
+    type="text"
+    inputMode="decimal"
+    placeholder=""
+    value={r.length}
+    onChange={(e) => updateMeasureRow(idx, "length", sanitizeDecimalStr(e.target.value, 2))}
+    onKeyDown={blockInvalidKeys}
+    onWheel={noWheelChange}
+    className="w-28 bg-neutral-900 border border-neutral-700 rounded-lg px-2 py-1.5 text-white text-right"
+  />
+</td>
+
+{/* สต็อก (จำนวนเต็ม) */}
+<td className="px-3 py-2">
+  <input
+    type="text"
+    inputMode="numeric"
+    placeholder="0"
+    value={r.stock}
+    onChange={(e) => updateMeasureRow(idx, "stock", sanitizeIntStr(e.target.value))}
+    onKeyDown={blockInvalidKeys}
+    onWheel={noWheelChange}
+    className="w-24 bg-neutral-900 border border-neutral-700 rounded-lg px-2 py-1.5 text-white text-right"
+  />
+</td>
+
+
+        <td className="px-3 py-2 text-right">
+          <button
+            onClick={() => removeMeasureRow(idx)}
+            className="px-3 py-1.5 rounded-lg bg-red-600/90 hover:bg-red-600 text-white"
+          >
+            ลบ
+          </button>
+        </td>
+      </tr>
+    ))
+  )}
+</tbody>
                   </table>
                 </div>
 
@@ -510,7 +700,8 @@ async function save() {
                 </div>
 
                 <p className="text-xs text-neutral-500 mt-2">
-                  * ค่าที่กรอกจะถูกส่งเป็น <code>measureVariants</code> เช่น <code>[&#123; chest_cm:40, length_cm:27, stock:3 &#125;]</code>
+                  * ค่าที่กรอกจะถูกส่งเป็น <code>measureVariants</code> เช่น{" "}
+                  <code>[&#123; chest_cm:40, length_cm:27, stock:3 &#125;]</code>
                 </p>
               </div>
 
@@ -531,6 +722,42 @@ async function save() {
 }
 
 
+// ===== helpers สำหรับค้นหาด้วยสถานะ =====
+const STATUS_LABELS = {
+  pending: "รอดำเนินการ",
+  ready_to_ship: "รอจัดส่ง",
+  paid: "ชำระเงินแล้ว",
+  shipped: "จัดส่งแล้ว",
+  done: "สำเร็จ",
+  cancelled: "ยกเลิก",
+};
+
+const PAY_LABELS = {
+  unpaid: "ยังไม่ชำระ",
+  submitted: "ส่งสลิปแล้ว",
+  paid: "ชำระแล้ว",
+  rejected: "สลิปถูกปฏิเสธ",
+}; 
+// 1) แปลบทบาทเป็นไทย
+const ROLE_TH = {
+  buyer: "ผู้ซื้อ",
+  admin: "ผู้ขาย" 
+};
+
+
+function matchStatusKeyword(order, kw) {
+  const statusTh = STATUS_LABELS[order.status] || "";
+  const payTh    = PAY_LABELS[order.payment_status || "unpaid"] || "";
+
+  const tokens = [
+    String(order.status || ""),          // pending, ready_to_ship, ...
+    statusTh,                            // ไทย
+    String(order.payment_status || ""),  // unpaid, submitted, paid, rejected
+    payTh,                               // ไทย
+  ].map((s) => String(s).toLowerCase().trim()).filter(Boolean);
+
+  return tokens.some((t) => t.includes(kw));
+}
 
 
 function OrdersPanel() {
@@ -543,28 +770,78 @@ function OrdersPanel() {
   const [savingStatus, setSavingStatus] = useState(false);
   const [paying, setPaying] = useState(false);
   const [rejecting, setRejecting] = useState(false);
+ // 🔎 ค้นหา/ฟิลเตอร์
+  const [q, setQ] = useState("");
+  const [dateFrom, setDateFrom] = useState(""); // YYYY-MM-DD
+  const [dateTo, setDateTo] = useState("");     // YYYY-MM-DD
 
+  // 🔢 แบ่งหน้า
+  const PAGE_SIZE = 10;
+  const [page, setPage] = useState(1);
+
+// ช่วย normalize string
+const norm = (s) => String(s || "").toLowerCase().trim();
+
+const filtered = useMemo(() => {
+  const kw = norm(q);
+
+  const from = dateFrom ? new Date(`${dateFrom}T00:00:00`) : null;
+  const to   = dateTo   ? new Date(`${dateTo}T23:59:59`)   : null;
+
+  return (orders || []).filter((o) => {
+    const created = new Date(o.created_at);
+    if (from && created < from) return false;
+    if (to && created > to) return false;
+
+    if (!kw) return true;
+    const code = o.order_code ? String(o.order_code) : `#${o.id}`;
+
+    return (
+      norm(o.full_name).includes(kw) ||
+      norm(o.email).includes(kw) ||
+      norm(code).includes(kw) ||
+      norm(o.tracking_code).includes(kw) ||
+      String(o.total_price || "").includes(kw) ||
+      norm(new Date(o.created_at).toLocaleDateString("th-TH")).includes(kw) ||
+      matchStatusKeyword(o, kw)                    // ⬅️ ต้องมี || ตรงนี้
+    );
+  });
+}, [q, orders, dateFrom, dateTo]);
+
+// ⬇️ ADD: รีเซ็ตหน้าเมื่อเปลี่ยนเงื่อนไขค้นหา/วันที่/รายการ
+useEffect(() => {
+  setPage(1);
+}, [q, dateFrom, dateTo, orders]);
+
+// ⬇️ ADD: คำนวณเพจจิ้ง (ใช้ PAGE_SIZE, page)
+const total = filtered.length;
+const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
+const pageItems = useMemo(() => {
+  const start = (page - 1) * PAGE_SIZE;
+  return filtered.slice(start, start + PAGE_SIZE);
+}, [filtered, page]);
   const API_ORDERS = "http://localhost:3000/api/admin/orders";
 
   const CURRENCY = (n) =>
     new Intl.NumberFormat("th-TH", { style: "currency", currency: "THB" }).format(Number(n || 0));
 
-  // ======= labels / badges =======
-  const STATUS_LABELS = {
-    pending: "รอดำเนินการ",
-    ready_to_ship: "รอจัดส่ง",
-    paid: "ชำระเงินแล้ว",
-    shipped: "จัดส่งแล้ว",
-    done: "สำเร็จ",
-    cancelled: "ยกเลิก",
-  };
+  // ===== helpers สำหรับค้นหาด้วยสถานะ =====
+const STATUS_LABELS = {
+  pending: "รอดำเนินการ",
+  ready_to_ship: "รอจัดส่ง",
+  paid: "ชำระเงินแล้ว",
+  shipped: "จัดส่งแล้ว",
+  done: "สำเร็จ",
+  cancelled: "ยกเลิก",
+};
 
-  const PAY_LABELS = {
-    unpaid: "ยังไม่ชำระ",
-    submitted: "ส่งสลิปแล้ว",
-    paid: "ชำระแล้ว",
-    rejected: "สลิปถูกปฏิเสธ",
-  };
+const PAY_LABELS = {
+  unpaid: "ยังไม่ชำระ",
+  submitted: "ส่งสลิปแล้ว",
+  paid: "ชำระแล้ว",
+  rejected: "สลิปถูกปฏิเสธ",
+};
+
 
   // ชื่อวิธีชำระเป็นไทย
   const PAYMENT_METHOD_TH = {
@@ -785,27 +1062,38 @@ async function saveStatus() {
     }
   }
 
-  // ยกเลิกออเดอร์
   async function cancelOrder() {
-    const oid = detail?.order?.id;
-    if (!oid) return;
-    const restock = window.confirm('ต้องการคืนสต็อกสินค้าด้วยหรือไม่? กด OK = คืนสต็อก, Cancel = ไม่คืน');
+  const oid = detail?.order?.id;
+  if (!oid) return;
 
-    try {
-      const res = await fetch(`${API_ORDERS}/${oid}/cancel`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ restock }),
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data?.message || "ยกเลิกออเดอร์ไม่สำเร็จ");
-      setOrders(os => os.map(o => o.id === oid ? { ...o, status: data.status } : o));
-      setDetail(d => d ? { ...d, order: { ...d.order, status: data.status } } : d);
-      alert("ยกเลิกออเดอร์เรียบร้อย");
-    } catch (e) {
-      alert(e.message);
-    }
+  const reason = window.prompt("กรุณากรอกเหตุผลในการยกเลิก:", "");
+  if (reason === null) return;
+
+  const restock = window.confirm("ต้องการคืนสต๊อกสินค้าด้วยหรือไม่? OK = คืนสต๊อก, Cancel = ไม่คืน");
+
+  try {
+    const res = await fetch(`${API_ORDERS}/${oid}/cancel`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ restock, reason }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data?.message || "ยกเลิกออเดอร์ไม่สำเร็จ");
+
+    setOrders(os => os.map(o =>
+      o.id === oid ? { ...o, status: data.status, cancel_reason: data.cancel_reason } : o
+    ));
+    setDetail(d => d ? {
+      ...d,
+      order: { ...d.order, status: data.status, cancel_reason: data.cancel_reason, cancelled_by: data.cancelled_by, cancelled_at: data.cancelled_at }
+    } : d);
+
+    alert("ยกเลิกออเดอร์เรียบร้อย");
+  } catch (e) {
+    alert(e.message);
   }
+}
+
 
   /* ================= Actions: tracking ================= */
   async function saveTracking() {
@@ -858,120 +1146,236 @@ async function saveStatus() {
     `inline-flex items-center px-2.5 py-1 rounded-full text-xs font-semibold whitespace-nowrap ${extra}`;
 
   return (
-    <div className="p-6">
-      <h2 className="text-xl font-semibold text-white mb-4">รายการออเดอร์</h2>
+   <div className="p-6">
+  <h2 className="text-xl font-semibold text-white mb-4">รายการออเดอร์</h2>
 
-      <div className="overflow-x-auto border border-neutral-800 rounded-2xl">
-        <table className="min-w-full text-sm">
-          <thead className="bg-neutral-950 text-neutral-400">
-            <tr>
-              <th className="px-4 py-3 text-left">รหัสออเดอร์</th>
-              <th className="px-4 py-3 text-left">ลูกค้า</th>
-              <th className="px-4 py-3 text-left">สถานะ</th>
-              <th className="px-4 py-3 text-left">การชำระเงิน</th>
-              <th className="px-4 py-3 text-left">ติดตาม</th>
-              <th className="px-4 py-3 text-right">ยอดรวม</th>
-              <th className="px-4 py-3 text-left">วันที่</th>
-              <th className="px-4 py-3 text-right">จัดการ</th>
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-neutral-800 bg-neutral-900">
-            {loading ? (
-              <tr><td colSpan={8} className="px-4 py-6 text-center text-neutral-400">กำลังโหลด...</td></tr>
-            ) : orders.length === 0 ? (
-              <tr><td colSpan={8} className="px-4 py-6 text-center text-neutral-400">ยังไม่มีออเดอร์</td></tr>
-            ) : (
-              orders.map((o) => (
-                <tr key={o.id} className="hover:bg-neutral-800/60">
-                  <td className="px-4 py-3 text-white font-medium">
-                    {o.order_code ? o.order_code : `#${o.id}`}
-                  </td>
-                  <td className="px-4 py-3 text-neutral-300">
-  <div className="flex flex-col">
-    <span className="font-medium text-white">{o.full_name || "-"}</span>
-    <span className="text-xs text-neutral-400">{o.email || "-"}</span>
+  {/* 🔍 ค้นหา + วันที่ */}
+<div className="mb-4 flex flex-col md:flex-row gap-2 md:items-end">
+  <div className="flex-1">
+    <label className="block text-sm text-neutral-300 mb-1">ค้นหา</label>
+    <input
+      type="text"
+      placeholder="ชื่อ, อีเมล, รหัสออเดอร์, เลขพัสดุ, ยอดรวม,สถานะ"
+      value={q}
+      onChange={(e) => setQ(e.target.value)}
+      className="w-full px-4 py-2 border border-neutral-800 rounded-lg bg-neutral-900 text-white"
+    />
   </div>
-</td>
 
-                  {/* สถานะ: ไม่หักบรรทัด */}
-                  <td className="px-4 py-3 whitespace-nowrap">
-                    <span className={chip(statusClass(o.status))}>
-                      {STATUS_LABELS[o.status] || "รอดำเนินการ"}
-                    </span>
-                  </td>
+  <div>
+    <label className="block text-sm text-neutral-300 mb-1">จากวันที่</label>
+    <input
+      type="date"
+      value={dateFrom}
+      onChange={(e) => setDateFrom(e.target.value)}
+      className="px-3 py-2 border border-neutral-800 rounded-lg bg-neutral-900 text-white"
+    />
+  </div>
 
-                 <td className="px-4 py-3 whitespace-nowrap">
-  <span className={chip(payClass(o.payment_status))}>
-    {PAY_LABELS[o.payment_status || "unpaid"]}
-  </span>
+  <div>
+    <label className="block text-sm text-neutral-300 mb-1">ถึงวันที่</label>
+    <input
+      type="date"
+      value={dateTo}
+      onChange={(e) => setDateTo(e.target.value)}
+      className="px-3 py-2 border border-neutral-800 rounded-lg bg-neutral-900 text-white"
+    />
+  </div>
 
-  {o.payment_method && (
-    <span className="ml-2 text-xs text-neutral-400">
-      {PAYMENT_METHOD_TH[o.payment_method] || o.payment_method}
-    </span>
-  )}
-
-  {o.payment_status === 'submitted' && !o.slip_image && (
-    <span className="ml-2 text-xs text-amber-400">(ไม่มีไฟล์)</span>
-  )}
-
-  {o.slip_image && (
-    <a
-      href={`http://localhost:3000${o.slip_image}`}
-      target="_blank" rel="noreferrer"
-      className="ml-2 underline text-xs text-neutral-300"
+  {(q || dateFrom || dateTo) && (
+    <button
+      onClick={() => { setQ(""); setDateFrom(""); setDateTo(""); }}
+      className="h-10 px-4 border border-neutral-700 rounded-lg bg-neutral-900 text-neutral-200"
+      title="ล้างฟิลเตอร์ทั้งหมด"
     >
-      ดูสลิป
-    </a>
+      ล้าง
+    </button>
   )}
-</td>
+</div>
 
-                  {/* คอลัมน์ติดตาม */}
-                  <td className="px-4 py-3">
-                    {o.tracking_code ? (
-                      <a
-                        href={trackingUrl(o.tracking_carrier, o.tracking_code)}
-                        target="_blank" rel="noreferrer"
-                        className="text-sm underline text-sky-300"
-                        title={o.tracking_code}
-                      >
-                        {(TRACK_CARRIERS[o.tracking_carrier]?.label || "ติดตาม")} • {o.tracking_code}
-                      </a>
-                    ) : (
-                      <span className="text-neutral-500 text-sm">—</span>
-                    )}
-                  </td>
+  <div className="overflow-x-auto border border-neutral-800 rounded-2xl">
+    <table className="min-w-full text-sm">
+      <thead className="bg-neutral-950 text-neutral-400">
+        <tr>
+          <th className="px-4 py-3 text-left">รหัสออเดอร์</th>
+          <th className="px-4 py-3 text-left">ลูกค้า</th>
+          <th className="px-4 py-3 text-left">สถานะ</th>
+          <th className="px-4 py-3 text-left">การชำระเงิน</th>
+          <th className="px-4 py-3 text-left">ติดตาม</th>
+          <th className="px-4 py-3 text-right">ยอดรวม</th>
+          <th className="px-4 py-3 text-left">วันที่</th>
+          <th className="px-4 py-3 text-right">จัดการ</th>
+        </tr>
+      </thead>
+      <tbody className="divide-y divide-neutral-800 bg-neutral-900">
+        {loading ? (
+          <tr>
+            <td colSpan={8} className="px-4 py-6 text-center text-neutral-400">
+              กำลังโหลด...
+            </td>
+          </tr>
+        ) : filtered.length === 0 ? (
+          <tr>
+            <td colSpan={8} className="px-4 py-6 text-center text-neutral-400">
+              {q ? <>ไม่พบออเดอร์ที่ตรงกับ “{q}”</> : <>ยังไม่มีออเดอร์</>}
+            </td>
+          </tr>
+        ) : (
+          pageItems.map((o) => (
+            <tr key={o.id} className="hover:bg-neutral-800/60">
+              <td className="px-4 py-3 text-white font-medium">
+                {o.order_code ? o.order_code : `#${o.id}`}
+              </td>
 
-                  <td className="px-4 py-3 text-right text-white">{CURRENCY(o.total_price)}</td>
-                  <td className="px-4 py-3 text-neutral-400">
-                    {o.created_at ? new Date(o.created_at).toLocaleString("th-TH") : "-"}
-                  </td>
-                  <td className="px-4 py-3 text-right">
-                    <button
-                      onClick={() => openDetail(o.id)}
-                      className="px-3 py-1.5 rounded-lg bg-white text-black hover:bg-neutral-200"
-                    >
-                      รายละเอียด
-                    </button>
-                  </td>
-                </tr>
-              ))
-            )}
-          </tbody>
-        </table>
+              <td className="px-4 py-3 text-neutral-300">
+                <div className="flex flex-col">
+                  <span className="font-medium text-white">{o.full_name || "-"}</span>
+                  <span className="text-xs text-neutral-400">{o.email || "-"}</span>
+                </div>
+              </td>
+
+              {/* สถานะ */}
+              <td className="px-4 py-3 whitespace-nowrap">
+                <span className={chip(statusClass(o.status))}>
+                  {STATUS_LABELS[o.status] || "รอดำเนินการ"}
+                </span>
+              </td>
+
+              {/* การชำระเงิน */}
+              <td className="px-4 py-3 whitespace-nowrap">
+                <span className={chip(payClass(o.payment_status))}>
+                  {PAY_LABELS[o.payment_status || "unpaid"]}
+                </span>
+
+                {o.payment_method && (
+                  <span className="ml-2 text-xs text-neutral-400">
+                    {PAYMENT_METHOD_TH[o.payment_method] || o.payment_method}
+                  </span>
+                )}
+
+                {o.payment_status === "submitted" && !o.slip_image && (
+                  <span className="ml-2 text-xs text-amber-400">(ไม่มีไฟล์)</span>
+                )}
+
+                {o.slip_image && (
+                  <a
+                    href={`http://localhost:3000${o.slip_image}`}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="ml-2 underline text-xs text-neutral-300"
+                  >
+                    ดูสลิป
+                  </a>
+                )}
+              </td>
+
+              {/* คอลัมน์ติดตาม */}
+              <td className="px-4 py-3">
+                {o.tracking_code ? (
+                  <a
+                    href={trackingUrl(o.tracking_carrier, o.tracking_code)}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="text-sm underline text-sky-300"
+                    title={o.tracking_code}
+                  >
+                    {(TRACK_CARRIERS[o.tracking_carrier]?.label || "ติดตาม")} • {o.tracking_code}
+                  </a>
+                ) : (
+                  <span className="text-neutral-500 text-sm">—</span>
+                )}
+              </td>
+
+              <td className="px-4 py-3 text-right text-white">{CURRENCY(o.total_price)}</td>
+              <td className="px-4 py-3 text-neutral-400">
+                {o.created_at ? new Date(o.created_at).toLocaleString("th-TH") : "-"}
+              </td>
+              <td className="px-4 py-3 text-right">
+                <button
+                  onClick={() => openDetail(o.id)}
+                  className="px-3 py-1.5 rounded-lg bg-white text-black hover:bg-neutral-200"
+                >
+                  รายละเอียด
+                </button>
+              </td>
+            </tr>
+          ))
+        )}
+      </tbody>
+    </table>
+  </div>
+
+    {/* ⬇️ ADD: สรุปผล + เพจจิ้ง */}
+    <div className="flex flex-col md:flex-row md:items-center justify-between gap-2 px-4 py-3 bg-neutral-900 border-t border-neutral-800 rounded-b-2xl">
+      <div className="text-sm text-neutral-400">
+        แสดง {total === 0 ? 0 : (page - 1) * PAGE_SIZE + 1}
+        –
+        {Math.min(page * PAGE_SIZE, total)} จาก {total} รายการ
       </div>
 
-      {detailOpen && detail?.order ? (
-        <div className="fixed inset-0 z-30">
-          <div className="absolute inset-0 bg-black/60" onClick={() => setDetailOpen(false)} />
-          <div className="absolute right-0 top-0 h-full w-full sm:w-[680px] bg-neutral-950 border-l border-neutral-800 p-5 overflow-y-auto">
-            <div className="flex items-center justify-between mb-4">
-              <h3 className="text-white font-semibold">
-                ออเดอร์ {detail.order.order_code || `#${detail.order.id}`}
-              </h3>
-              <button onClick={() => setDetailOpen(false)} className="text-neutral-400 hover:text-white">ปิด</button>
-            </div>
+      <div className="flex items-center gap-1">
+        <button
+          className="px-3 py-1.5 border border-neutral-700 rounded-lg text-neutral-200 disabled:opacity-50"
+          disabled={page === 1}
+          onClick={() => setPage(1)}
+        >
+          « หน้าแรก
+        </button>
+        <button
+          className="px-3 py-1.5 border border-neutral-700 rounded-lg text-neutral-200 disabled:opacity-50"
+          disabled={page === 1}
+          onClick={() => setPage((p) => Math.max(1, p - 1))}
+        >
+          ‹ ก่อนหน้า
+        </button>
 
+        <span className="px-2 text-sm text-neutral-300">
+          หน้า {page} / {totalPages}
+        </span>
+
+        <button
+          className="px-3 py-1.5 border border-neutral-700 rounded-lg text-neutral-200 disabled:opacity-50"
+          disabled={page === totalPages}
+          onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+        >
+          ถัดไป ›
+        </button>
+        <button
+          className="px-3 py-1.5 border border-neutral-700 rounded-lg text-neutral-200 disabled:opacity-50"
+          disabled={page === totalPages}
+          onClick={() => setPage(totalPages)}
+        >
+          หน้าสุดท้าย »
+        </button>
+      </div>
+    </div>
+
+
+
+
+      {detailOpen && detail?.order ? (
+  <div className="fixed inset-0 z-30">
+    <div
+      className="absolute inset-0 bg-black/60"
+      onClick={() => setDetailOpen(false)}
+    />
+    <div
+      className="absolute right-0 top-0 h-full w-full sm:w-[680px] 
+                 bg-neutral-950 border-l border-neutral-800 
+                 p-5 overflow-y-auto pb-28"
+      style={{ paddingBottom: "calc(env(safe-area-inset-bottom) + 2rem)" }}
+    >
+      <div className="flex items-center justify-between mb-4">
+        <h3 className="text-white font-semibold">
+          ออเดอร์ {detail.order.order_code || `#${detail.order.id}`}
+        </h3>
+        <button
+          onClick={() => setDetailOpen(false)}
+          className="text-neutral-400 hover:text-white"
+        >
+          ปิด
+        </button>
+      </div>
             {/* สถานะคำสั่งซื้อ */}
             <div className="mb-4">
               <label className="block text-sm text-neutral-400 mb-1">สถานะคำสั่งซื้อ</label>
@@ -1036,6 +1440,29 @@ async function saveStatus() {
                     </span>
                   )}
 
+{detail.order.status === "cancelled" && (
+  <div className="mb-6 rounded-xl border border-rose-700 bg-rose-950/40 p-4 text-rose-200">
+    <div className="text-sm font-semibold">เหตุผลการยกเลิก</div>
+    <div className="mt-1 text-sm whitespace-pre-wrap">
+      {detail.order.cancel_reason || "—"}
+    </div>
+
+    <div className="mt-1 text-xs text-rose-300/80">
+      โดย: {ROLE_TH[detail.order.cancelled_by] || "ไม่ระบุ"}
+      {detail.order.cancelled_at && (
+        <>
+          {" "}
+          • เมื่อ{" "}
+          {new Date(detail.order.cancelled_at).toLocaleString("th-TH", {
+            dateStyle: "medium",
+            timeStyle: "medium",
+          })}
+        </>
+      )}
+    </div>
+  </div>
+)}
+
                   <button
                     onClick={cancelOrder}
                     disabled={['cancelled','done','shipped'].includes(detail.order.status)}
@@ -1095,7 +1522,7 @@ async function saveStatus() {
 
                 {/* —— Tracking Form —— */}
                 <div className="mt-4 pt-4 border-t border-neutral-800">
-                  <div className="text-white font-medium mb-2">เลขพัสดุ / ค่ายขนส่ง</div>
+                  <div className="text-white font-medium mb-2">ค่าขนส่ง/เลขพัสดุ</div>
 
                   <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
                     <select
@@ -1112,6 +1539,9 @@ async function saveStatus() {
                     <input
                       value={trackingDraft.code}
                       onChange={(e) => setTrackingDraft(d => ({ ...d, code: e.target.value }))}
+                      onInput={(e) => {
+                      e.target.value = e.target.value.replace(/[^a-zA-Z0-9]/g, '');
+  }}
                       placeholder="เลขพัสดุ เช่น TH1234..., KEX..."
                       className="bg-neutral-900 border border-neutral-700 rounded-xl px-3 py-2 text-white sm:col-span-2"
                     />
@@ -1243,16 +1673,102 @@ const CHART = {
 };
 const axisTick = { fill: CHART.subtext, fontSize: 12 };
 const gridStyle = { stroke: CHART.grid, strokeDasharray: "3 3" };
+// ===== Helpers for recent-orders (วางนอก component) =====
+const SERVER_ORIGIN = (() => {
+  try { return new URL(API.products).origin; }
+  catch { return window.location.origin; }
+})();
+
+// ต่อ URL ให้ครบทุกเคส: https://..., /uploads/xxx, uploads/xxx, หรือชื่อไฟล์ล้วน
+function makeUrl(u) {
+  if (!u) return null;
+  if (/^https?:\/\//i.test(u)) return u;               // URL เต็ม
+  if (u.startsWith("/")) return `${SERVER_ORIGIN}${u}`; // "/uploads/xxx.jpg"
+  if (u.startsWith("uploads/")) return `${SERVER_ORIGIN}/${u}`; // "uploads/xxx.jpg"
+  return `${SERVER_ORIGIN}/uploads/${u}`;               // "xxx.jpg"
+}
+
+// ปรับ recent-orders ให้พร้อมใช้ (ฝั่งหน้าเว็บ)
+function normalizeOrders(arr) {
+  return (Array.isArray(arr) ? arr : []).map(o => ({
+    order_id: o.order_id,
+    order_time: o.order_time,
+    status: o.status,
+    shipping_method: o.shipping_method || "",
+    buyer_name: o.buyer_name || "ลูกค้า",
+    email: o.email || "",
+    phone: o.phone || "",
+    order_total: Number(o.order_total || 0),
+    items: Array.isArray(o.items)
+      ? o.items.map(it => {
+          const raw = it.image || it.product_image || null; // รองรับหลายชื่อจาก API
+          return {
+            product_id: it.product_id,
+            product_name: it.product_name,
+            category_name: it.category_name || "ไม่ระบุ",
+            quantity: Number(it.quantity || 0),
+            unit_price: Number(it.unit_price || 0),
+            line_total: Number(it.line_total || 0),
+            image: raw,
+            image_url: it.image_url || makeUrl(raw),
+          };
+        })
+      : [],
+  }));
+}
+
+const renderPieLabel = (p) => {
+  const RAD = Math.PI / 180;
+  const r = p.outerRadius + 18; 
+  const x = p.cx + r * Math.cos(-p.midAngle * RAD);
+  const y = p.cy + r * Math.sin(-p.midAngle * RAD);
+  const anchor = x > p.cx ? "start" : "end";
+
+  return (
+    <text
+      x={x}
+      y={y}
+      textAnchor={anchor}
+      dominantBaseline="central"
+    >
+      <tspan fill="#AAA" fontSize={12}>{p.name}</tspan>
+      <tspan dx="6" fontSize={16} fontWeight="bold" fill="#FFF" style={{ textShadow: "0 0 4px rgba(0,0,0,0.6)" }}>
+        {(p.percent * 100).toFixed(0)}%
+      </tspan>
+    </text>
+  );
+};
+
 
 function DashboardPanel() {
   const [overview, setOverview] = useState({ total_revenue: 0, orders_count: 0, customers: 0 });
   const [salesByDay, setSalesByDay] = useState([]);
   const [topProducts, setTopProducts] = useState([]);
   const [byCategory, setByCategory] = useState([]);
-  const [recentOrders, setRecentOrders] = useState([]);   // ✅ เหลือเฉพาะออเดอร์ล่าสุด
+  const [recentOrders, setRecentOrders] = useState([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
 
+  // ===== helpers: image thumbs (ใน component ได้) =====
+  const PLACEHOLDER = "https://placehold.co/64x64?text=IMG";
+ const BarTT = ({ active, payload, label }) =>
+  active && payload?.length ? (() => {
+    const p = payload[0].payload; // ✅ เอา object ทั้งแถวของ bar
+    return (
+      <div className="flex items-center gap-2 rounded-lg border border-neutral-700 bg-neutral-900 px-3 py-2 text-sm text-white">
+        <img
+          src={p.image_url || p.image || PLACEHOLDER}
+          alt={p.name}
+          className="w-10 h-10 rounded object-cover border border-neutral-700"
+          onError={(e) => (e.currentTarget.src = PLACEHOLDER)}
+        />
+        <div>
+          <div className="font-medium">{p.name || label}</div>
+          <div className="text-neutral-400">ขายได้ {p.qty_sold} ชิ้น</div>
+        </div>
+      </div>
+    );
+  })() : null;
   // ===== Formatters =====
   const fmtTHB = (n) =>
     new Intl.NumberFormat("th-TH", { style: "currency", currency: "THB", maximumFractionDigits: 0 }).format(Number(n || 0));
@@ -1281,40 +1797,24 @@ function DashboardPanel() {
     catch { return d; }
   };
 
-  // ===== Normalizers =====
+  // ===== Normalizers สำหรับกราฟ (ยังอยู่ใน component ได้) =====
   const normalizeSales = (arr) =>
     (Array.isArray(arr) ? arr : []).map((x, i) => ({
       day: x.day || x.date || x.created_at || `#${i + 1}`,
       revenue: Number(x.revenue ?? x.total ?? x.amount ?? x.sum ?? 0),
     }));
   const normalizeTop = (arr) =>
-    (Array.isArray(arr) ? arr : []).map((x) => ({
-      name: x.name || x.product_name || x.title || `#${x.product_id ?? x.id ?? "-"}`,
-      qty_sold: Number(x.qty_sold ?? x.quantity ?? x.qty ?? 0),
-    }));
+  (Array.isArray(arr) ? arr : []).map(x => ({
+    product_id: x.product_id ?? x.id,
+    name: x.name || `#${x.id ?? '-'}`,
+    qty_sold: Number(x.qty_sold ?? 0),
+    revenue: Number(x.revenue ?? 0),
+    image_url: x.image_url || null,
+  }));
   const normalizeCat = (arr) =>
     (Array.isArray(arr) ? arr : []).map((x) => ({
       category: x.category || x.category_name || x.name || "ไม่ระบุ",
       revenue: Number(x.revenue ?? x.total ?? x.amount ?? 0),
-    }));
-  const normalizeOrders = (arr) =>
-    (Array.isArray(arr) ? arr : []).map(o => ({
-      order_id: o.order_id,
-      order_time: o.order_time,
-      status: o.status,
-      shipping_method: o.shipping_method || "",
-      buyer_name: o.buyer_name || "ลูกค้า",
-      email: o.email || "",
-      phone: o.phone || "",
-      order_total: Number(o.order_total || 0),
-      items: Array.isArray(o.items) ? o.items.map(it => ({
-        product_id: it.product_id,
-        product_name: it.product_name,
-        category_name: it.category_name || "ไม่ระบุ",
-        quantity: Number(it.quantity || 0),
-        unit_price: Number(it.unit_price || 0),
-        line_total: Number(it.line_total || 0),
-      })) : [],
     }));
 
   // ===== Fetch =====
@@ -1335,7 +1835,60 @@ function DashboardPanel() {
           fetch(`${API.metrics}/sales-by-day?${query}`),
           fetch(`${API.metrics}/top-products?${query}`),
           fetch(`${API.metrics}/category-breakdown?${query}`),
-          fetch(`${API.metrics}/recent-orders?limit=10&${query}`), // ✅ เอาเฉพาะ recent-orders
+          fetch(`${API.metrics}/recent-orders?limit=10`)
+        ]);
+
+        const [o, d, t, c, ro] = await Promise.all([
+          oRes.json(), dRes.json(), tRes.json(), cRes.json(),
+          roRes.ok ? roRes.json() : Promise.resolve([]),
+        ]);
+
+        if (!oRes.ok || !dRes.ok || !tRes.ok || !cRes.ok) {
+          throw new Error(`metrics error: ${oRes.status}/${dRes.status}/${tRes.status}/${cRes.status}`);
+        }
+
+        setOverview({
+          total_revenue: Number(o?.total_revenue ?? o?.total ?? 0),
+          orders_count: Number(o?.orders_count ?? o?.orders ?? 0),
+          customers: Number(o?.customers ?? o?.unique_customers ?? 0),
+        });
+        setSalesByDay(normalizeSales(d));
+        setTopProducts(normalizeTop(t));
+        setByCategory(normalizeCat(c));
+        setRecentOrders(normalizeOrders(ro)); // ← ใช้ helper นอก component
+      } catch (err) {
+        console.error("metrics fetch error:", err);
+        setError(err?.message || "โหลดข้อมูลล้มเหลว");
+        setOverview({ total_revenue: 0, orders_count: 0, customers: 0 });
+        setSalesByDay([]);
+        setTopProducts([]);
+        setByCategory([]);
+        setRecentOrders([]);
+      } finally {
+        setLoading(false);
+      }
+    })();
+  }, []); // ✅ ไม่มี warning อีก เพราะ normalizeOrders อยู่ "นอก" component
+
+  // ===== Fetch =====
+  useEffect(() => {
+    const query = new URLSearchParams({
+      from: `${new Date().getFullYear()}-01-01`,
+      to: "2999-12-31",
+      limit: "5",
+    }).toString();
+
+    (async () => {
+      try {
+        setLoading(true);
+        setError("");
+
+        const [oRes, dRes, tRes, cRes, roRes] = await Promise.all([
+          fetch(`${API.metrics}/overview?${query}`),
+          fetch(`${API.metrics}/sales-by-day?${query}`),
+          fetch(`${API.metrics}/top-products?${query}`),
+          fetch(`${API.metrics}/category-breakdown?${query}`),
+          fetch(`${API.metrics}/recent-orders?limit=10`)
         ]);
         const [o, d, t, c, ro] = await Promise.all([
           oRes.json(), dRes.json(), tRes.json(), cRes.json(),
@@ -1403,13 +1956,7 @@ function DashboardPanel() {
         <div className="text-neutral-300">{fmtTHB(payload[0].value)}</div>
       </div>
     ) : null;
-  const BarTT = ({ active, payload, label }) =>
-    active && payload?.length ? (
-      <div className="rounded-lg border border-neutral-700 bg-neutral-900 px-3 py-2 text-sm text-white">
-        <div className="font-medium">{label}</div>
-        <div className="text-neutral-300">ขายได้ {payload[0].value} ชิ้น</div>
-      </div>
-    ) : null;
+
   const PieTT = ({ active, payload }) =>
     active && payload?.length ? (
       <div className="rounded-lg border border-neutral-700 bg-neutral-900 px-3 py-2 text-sm text-white">
@@ -1465,106 +2012,171 @@ function DashboardPanel() {
           </>
         ) : (
           <>
-            {/* Top products – Bar */}
-            <Card>
-              <div className="mb-2 font-semibold text-white">สินค้าขายดี (ตามจำนวนชิ้น)</div>
-              <div className="relative" style={{ height: 280 }}>
-                {topProducts.length === 0 && <NoData />}
-                <ResponsiveContainer width="100%" height="100%">
-                  <BarChart data={topProducts} margin={{ top: 10, right: 20, left: -10, bottom: 30 }}>
-                    <CartesianGrid {...gridStyle} />
-                    <XAxis dataKey="name" interval={0} angle={-20} textAnchor="end" height={60} tick={axisTick} />
-                    <YAxis allowDecimals={false} tick={axisTick} />
-                    <Tooltip content={<BarTT />} />
-                    <Bar dataKey="qty_sold" fill={CHART.bar} radius={[8, 8, 0, 0]} label={{ position: "top", fill: "#FFFFFF", fontSize: 12 }} />
-                  </BarChart>
-                </ResponsiveContainer>
-              </div>
-            </Card>
+<Card>
+  <div className="mb-2 font-semibold text-white">สินค้าขายดี (ตามจำนวนชิ้น)</div>
+  <div className="relative" style={{ height: 280 }}>
+    {topProducts.length === 0 && <NoData />}
+    <ResponsiveContainer width="100%" height="100%">
+      <BarChart data={topProducts} margin={{ top: 10, right: 20, left: -10, bottom: 30 }}>
+        <CartesianGrid {...gridStyle} />
+        <XAxis dataKey="name" interval={0} angle={-20} textAnchor="end" height={60} tick={axisTick} />
+        <YAxis allowDecimals={false} tick={axisTick} />
+        {/* ✅ ใช้คอมโพเนนต์ BarTT */}
+        <Tooltip content={<BarTT />} />
+        <Bar
+          dataKey="qty_sold"
+          fill={CHART.bar}
+          radius={[8, 8, 0, 0]}
+          label={{ position: "top", fill: "#FFFFFF", fontSize: 12 }}
+        />
+      </BarChart>
+    </ResponsiveContainer>
+  </div>
 
-            {/* Category breakdown – Donut */}
-            <Card>
-              <div className="mb-2 font-semibold text-white">ยอดขายตามหมวดหมู่</div>
-              <div className="relative" style={{ height: 280 }}>
-                {byCategory.length === 0 && <NoData />}
-                <ResponsiveContainer width="100%" height="100%">
-                  <PieChart>
-                    <Pie
-                      data={byCategory}
-                      dataKey="revenue"
-                      nameKey="category"
-                      cx="50%"
-                      cy="50%"
-                      innerRadius={60}
-                      outerRadius={110}
-                      labelLine={false}
-                      label={({ name, percent }) => `${name} ${(percent * 100).toFixed(0)}%`}
-                    >
-                      {byCategory.map((_, i) => (
-                        <Cell key={i} fill={CHART.pie[i % CHART.pie.length]} />
-                      ))}
-                    </Pie>
-                    <Tooltip content={<PieTT />} />
-                    <Legend wrapperStyle={{ color: CHART.text }} />
-                  </PieChart>
-                </ResponsiveContainer>
+  {/* รายการแบบ card พร้อมรูป (ถ้ามีส่วนนี้อยู่แล้วคงไว้ได้) */}
+  <ul className="mt-3 space-y-2">
+    {topProducts.map((p, i) => (
+      <li key={p.id || i} className="flex items-center gap-3">
+        <img
+          src={p.image_url || p.image || PLACEHOLDER}
+          alt={p.name}
+          className="w-10 h-10 rounded object-cover border border-neutral-700"
+          onError={(e) => (e.currentTarget.src = PLACEHOLDER)}
+        />
+        <div className="flex-1 min-w-0">
+          <div className="text-sm text-white truncate">{p.name}</div>
+          <div className="text-xs text-neutral-400">{p.qty_sold} ชิ้น</div>
+        </div>
+      </li>
+    ))}
+  </ul>
+</Card>
 
-                {/* center total */}
-                <div className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center">
-                  <div className="text-xs" style={{ color: CHART.subtext }}>รวม</div>
-                  <div className="text-sm font-semibold" style={{ color: CHART.text }}>{fmtTHB(totalCatRevenue)}</div>
-                </div>
-              </div>
-            </Card>
+<Card>
+  <div className="mb-2 font-semibold text-white">ยอดขายตามหมวดหมู่</div>
+  <div className="relative" style={{ height: 340 }}>
+    {byCategory.length === 0 && <NoData />}
+
+    <ResponsiveContainer width="100%" height="100%">
+      <PieChart style={{ overflow: "visible" }}>
+        <Pie
+          data={byCategory}
+          dataKey="revenue"
+          nameKey="category"
+          cx="50%"     // ✅ กึ่งกลางแนวนอน
+          cy="50%"     // ✅ กึ่งกลางแนวตั้ง (ตรงกลางวงกลมจริง)
+          innerRadius="52%"
+          outerRadius="78%"
+          labelLine
+          label={renderPieLabel}
+        >
+          {byCategory.map((_, i) => (
+            <Cell key={i} fill={CHART.pie[i % CHART.pie.length]} />
+          ))}
+        </Pie>
+        <Tooltip content={<PieTT />} />
+        <Legend
+          layout="horizontal"
+          verticalAlign="bottom"
+          align="center"
+          wrapperStyle={{ color: CHART.text, marginTop: 40 }}
+        />
+      </PieChart>
+    </ResponsiveContainer>
+
+    {/* ✅ center total (ตรงกลางวงกลมพอดี) */}
+    <div className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center">
+      <div className="text-sm font-medium" style={{ color: CHART.subtext }}>
+        รวม
+      </div>
+      <div className="text-lg font-bold mt-1" style={{ color: CHART.text }}>
+        {fmtTHB(totalCatRevenue)}
+      </div>
+    </div>
+  </div>
+</Card>
+
+
           </>
         )}
       </div>
 
-      {/* ✅ Recent orders – 10 ออเดอร์ล่าสุด */}
-      <Card>
-        <div className="mb-2 font-semibold text-white">ออเดอร์ที่สำเร็จล่าสุด</div>
-        <div className="relative">
-          {loading ? (
-            <div className="h-40"><Skeleton h={160} /></div>
-          ) : recentOrders.length === 0 ? (
-            <NoData>ยังไม่มีออเดอร์</NoData>
-          ) : (
-            <ul className="divide-y divide-neutral-800">
-              {recentOrders.map((o) => {
-                const first = o.items[0];
-                const more = Math.max((o.items?.length || 0) - 1, 0);
-                return (
-                  <li key={o.order_id} className="py-3 flex items-start gap-3">
-                    <div className="w-24 shrink-0">
-                      <div className="text-xs text-neutral-400">#{o.order_id}</div>
-                      <div className="text-[11px] text-neutral-500">{fmtTimeAgo(o.order_time)}</div>
-                    </div>
-                    <div className="flex-1 min-w-0">
-                      <div className="text-sm text-white font-medium truncate">
-                        {o.buyer_name} <span className="text-neutral-400">• {o.shipping_method || "ไม่ระบุการจัดส่ง"}</span>
-                      </div>
-                      {first ? (
-                        <div className="text-xs text-neutral-300 truncate">
-                          {first.product_name}
-                          <span className="text-neutral-500"> • {first.category_name}</span>
-                          <span className="text-neutral-500"> • x{first.quantity}</span>
-                          {more > 0 && <span className="ml-1 text-neutral-400">+{more} รายการ</span>}
-                        </div>
-                      ) : (
-                        <div className="text-xs text-neutral-500">ไม่มีสินค้า</div>
-                      )}
-                    </div>
-                    <div className="text-right w-28 shrink-0">
-                      <div className="text-xs text-neutral-400">{fmtDateTime(o.order_time)}</div>
-                      <div className="text-sm text-white font-semibold">{fmtTHB(o.order_total)}</div>
-                    </div>
-                  </li>
-                );
-              })}
+ {/* ✅ Recent orders – 10 ออเดอร์ล่าสุด */}
+<Card>
+  <div className="mb-2 font-semibold text-white">ออเดอร์ที่สำเร็จล่าสุด</div>
+  <div className="relative">
+    {loading ? (
+      <div className="h-40"><Skeleton h={160} /></div>
+    ) : recentOrders.length === 0 ? (
+      <NoData>ยังไม่มีออเดอร์</NoData>
+    ) : (
+<ul className="divide-y divide-neutral-800">
+  {recentOrders.map((o) => {
+    const items   = Array.isArray(o.items) ? o.items : [];
+    const show    = items.slice(0, 3);                       // โชว์ได้สูงสุด 3 ชิ้น
+    const more    = Math.max(items.length - show.length, 0);
+    const imgSrc = (it) => it.image_url || it.image || PLACEHOLDER;
+
+    return (
+      <li
+        key={o.order_id}
+        className="group py-3 flex items-start gap-3 transition-colors hover:bg-neutral-800/40 rounded-xl px-2 -mx-2"
+      >
+        {/* ซ้าย: เลขออเดอร์ + เวลาคร่าวๆ */}
+        <div className="w-24 shrink-0">
+          <div className="text-xs text-neutral-400">#{o.order_id}</div>
+          <div className="text-[11px] text-neutral-500">{fmtTimeAgo(o.order_time)}</div>
+        </div>
+
+        {/* กลาง: รายการสินค้า (รูป + ชื่อ + ×จำนวน) เรียงเป็นบรรทัด */}
+        <div className="flex-1 min-w-0">
+          <div className="text-sm text-white font-medium truncate">
+            {o.buyer_name} <span className="text-neutral-400">• {o.shipping_method || "ไม่ระบุการจัดส่ง"}</span>
+          </div>
+
+          {show.length > 0 ? (
+            <ul className="mt-1 space-y-1">
+              {show.map((it, idx) => (
+                <li key={idx} className="flex items-center gap-2">
+                  <img
+                    src={imgSrc(it)}
+                    alt={it.product_name || "product"}
+                    loading="lazy"
+                    className="w-8 h-8 rounded object-cover border border-neutral-700"
+                    onError={(e) => (e.currentTarget.src = PLACEHOLDER)}
+                  />
+                  <div className="text-xs text-neutral-300 truncate">
+                    {it.product_name}
+                    {it.category_name && (
+                      <span className="text-neutral-500"> • {it.category_name}</span>
+                    )}
+                    <span className="text-neutral-500"> • ×{it.quantity}</span>
+                  </div>
+                </li>
+              ))}
+              {more > 0 && (
+                <li className="text-[11px] text-neutral-400">+{more} รายการ</li>
+              )}
             </ul>
+          ) : (
+            <div className="text-xs text-neutral-500">ไม่มีสินค้า</div>
           )}
         </div>
-      </Card>
+
+        {/* ขวา: เวลาแน่นอน + ยอดรวม */}
+        <div className="text-right w-28 shrink-0">
+          <div className="text-xs text-neutral-400">{fmtDateTime(o.order_time)}</div>
+          <div className="text-sm text-white font-semibold tabular-nums">
+            {fmtTHB(o.order_total)}
+          </div>
+        </div>
+      </li>
+    );
+  })}
+</ul>
+    )}
+  </div>
+</Card>
     </div>
   );
 }
@@ -1672,6 +2284,40 @@ function UsersPanel() {
     </div>
   );
 }
+
+function MobileTabBar({ user, onLogout }) {
+  const loc = useLocation();
+  const isActive = (path) => loc.pathname === path;
+
+  return (
+    <div
+      className="md:hidden fixed bottom-0 inset-x-0 z-40 border-t border-neutral-800 bg-neutral-950/95 backdrop-blur"
+      style={{ paddingBottom: "env(safe-area-inset-bottom)" }}
+    >
+     <nav className="grid grid-cols-4 text-xs text-neutral-400">
+  <Link to="/" className={`flex flex-col items-center py-2 ${isActive("/") && "text-white"}`}>
+    <FaHome />
+    หน้าแรก
+  </Link>
+
+  <Link to="/cart" className={`flex flex-col items-center py-2 ${isActive("/cart") && "text-white"}`}>
+    <FaShoppingCart />
+    ตะกร้า
+  </Link>
+
+  <Link to="/orders" className={`flex flex-col items-center py-2 ${isActive("/orders") && "text-white"}`}>
+    <FaClipboardList />
+    ออเดอร์
+  </Link>
+
+  <Link to="/admin" className={`flex flex-col items-center py-2 ${isActive("/admin") && "text-white"}`}>
+    <FaUserShield />
+    Admin
+  </Link>
+</nav>
+    </div>
+  );
+}
 /* -------------------- AdminPage (รวมทั้งหมด + mobile drawer) -------------------- */
 export default function AdminPage() {
   const navigate = useNavigate();
@@ -1690,24 +2336,32 @@ export default function AdminPage() {
     setActive(key);
     setMobileOpen(false);
   };
+  // ⭐ เพิ่มฟังก์ชันนี้
+  const handleLogout = () => {
+    console.log("logout clicked");
+    // ถ้ามี AuthContext ให้เรียก logout() แทน console.log
+    // เช่น: logout();
+  };
 
-  return (
-    <div className="min-h-dvh bg-neutral-950">
+ return (
+    <div className="min-h-dvh bg-neutral-950 text-neutral-100 overflow-x-hidden">  {/* ⬅️ แก้ */}
       <TopBar title="แผงควบคุมผู้ดูแลระบบ" onMenu={() => setMobileOpen(true)} />
-      <div className="max-w-7xl mx-auto flex">
+      <div className="max-w-7xl mx-auto md:flex">                                   {/* ⬅️ ลดให้ไม่มี gap ขาว */}
         <Sidebar
           active={active}
           onChange={handleChange}
           isOpen={mobileOpen}
           onClose={() => setMobileOpen(false)}
         />
-        <main className="flex-1 min-w-0 md:ml-0">
+        <main className="flex-1 min-w-0 p-3 md:p-6">                                 {/* ⬅️ เพิ่ม p-3 บนมือถือ */}
           {active === "products" && <ProductsPanel />}
           {active === "orders" && <OrdersPanel />}
           {active === "users" && <UsersPanel />}
           {active === "dashboard" && <DashboardPanel />}
         </main>
       </div>
+      {/* ✅ เพิ่มตรงนี้ */}
+      <MobileTabBar user={user} onLogout={handleLogout} />
     </div>
   );
 }

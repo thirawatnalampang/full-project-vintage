@@ -1,9 +1,16 @@
 // src/components/ProductCard.jsx
-import React, { useMemo, useState } from 'react';
-import { useCart } from '../context/CartContext';
+import React, { useMemo, useState, useEffect, useRef } from 'react';
 import { Link } from 'react-router-dom';
+import { createPortal } from 'react-dom';
+import { useCart } from '../context/CartContext';
 
 const API_BASE = 'http://localhost:3000';
+
+// ---- Portal wrapper ----
+function ModalPortal({ children }) {
+  if (typeof document === 'undefined') return null;
+  return createPortal(children, document.body);
+}
 
 export default function ProductCard({ product }) {
   const { addToCart, cart = [] } = useCart();
@@ -13,12 +20,14 @@ export default function ProductCard({ product }) {
   const [selectedKey, setSelectedKey] = useState(null);
   const [limitHit, setLimitHit] = useState(false);
 
+  const modalContentRef = useRef(null);
+
   /* ---------- รวม “อก/ยาว” (รองรับ chest_in/length_in และ fallback *_cm/เก่า) ---------- */
   const measureVariants = useMemo(() => {
     if (!product) return [];
     const out = [];
 
-    // 1) จาก product.measure_variants / measureVariants (อาจเป็น array หรือ JSON string)
+    // 1) product.measure_variants / measureVariants (array หรือ JSON string)
     const mvDirect = Array.isArray(product?.measure_variants || product?.measureVariants)
       ? (product.measure_variants || product.measureVariants)
       : (() => {
@@ -38,7 +47,7 @@ export default function ProductCard({ product }) {
       }
     }
 
-    // 2) จาก product.variants (ถ้ามี)
+    // 2) product.variants
     const fromVariants = Array.isArray(product?.variants) ? product.variants : [];
     for (const v of fromVariants) {
       const chest  = Number(v?.chest_in  ?? v?.chest_cm  ?? v?.chest  ?? NaN);
@@ -54,7 +63,7 @@ export default function ProductCard({ product }) {
       }
     }
 
-    // 3) จาก sizeChart/stockBySize (ถ้ามี)
+    // 3) sizeChart/stockBySize
     const sizeChart   = product?.sizeChart   && typeof product.sizeChart === 'object' ? product.sizeChart   : null;
     const stockBySize = product?.stockBySize && typeof product.stockBySize === 'object' ? product.stockBySize : null;
     if (sizeChart) {
@@ -82,7 +91,7 @@ export default function ProductCard({ product }) {
       }
     }
 
-    // รวม key ซ้ำ → คงตัวที่สต็อกมากที่สุดไว้
+    // รวม key ซ้ำ → เก็บตัวที่สต็อกมากที่สุด
     const best = new Map();
     for (const v of out) {
       const prev = best.get(v.key);
@@ -141,7 +150,6 @@ export default function ProductCard({ product }) {
     }
     const chosen = measureVariants.find(m => m.key === selectedKey);
 
-    // ✅ แสดง/บันทึกเป็นนิ้ว ใช้สัญลักษณ์ ″ อย่างเดียว (เลี่ยง "นิ้ว นิ้ว")
     const sizeLabel = chosen ? `อก ${chosen.chest}″ / ยาว ${chosen.length}″` : null;
 
     addToCart({
@@ -153,7 +161,6 @@ export default function ProductCard({ product }) {
       price: Number(product.price || 0),
       qty: 1,
       size: sizeLabel,
-      // ✅ ส่ง measures เป็นนิ้วให้ backend ใหม่
       measures: chosen ? { chest_in: chosen.chest, length_in: chosen.length } : null,
       variantKey: selectedKey,
       maxStock: chosen ? Number(chosen.stock || 0) : undefined,
@@ -164,6 +171,34 @@ export default function ProductCard({ product }) {
     setTimeout(() => setAdded(false), 1200);
     setSelectedKey(null);
   };
+
+  /* ---------- UX: ล็อกสกอร์ล + ปิดด้วย ESC + กันคลิกทะลุ (capture) ---------- */
+  useEffect(() => {
+    if (!showPicker) return;
+    const orig = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+
+    const onKey = (e) => { if (e.key === 'Escape') setShowPicker(false); };
+    window.addEventListener('keydown', onKey);
+
+    const stopper = (e) => {
+      if (modalContentRef.current?.contains(e.target)) return;
+      e.preventDefault();
+      e.stopPropagation();
+    };
+    // จับตั้งแต่ capture phase ป้องกันคลิกทะลุแม้โมดัลเพิ่งปิด
+    document.addEventListener('pointerdown', stopper, true);
+    document.addEventListener('click', stopper, true);
+    document.addEventListener('touchstart', stopper, true);
+
+    return () => {
+      document.body.style.overflow = orig;
+      window.removeEventListener('keydown', onKey);
+      document.removeEventListener('pointerdown', stopper, true);
+      document.removeEventListener('click', stopper, true);
+      document.removeEventListener('touchstart', stopper, true);
+    };
+  }, [showPicker]);
 
   /* ---------- UI ---------- */
   const addBtnDisabled = !anyLeft;
@@ -248,84 +283,90 @@ export default function ProductCard({ product }) {
         </div>
       </div>
 
-      {/* Modal เลือก อก/ยาว */}
+      {/* Modal เลือก อก/ยาว — ผ่าน Portal บน document.body */}
       {showPicker && (
-        <div
-          className="fixed inset-0 z-[100] flex items-end sm:items-center justify-center bg-black/40 p-4"
-          onClick={() => setShowPicker(false)}
-        >
+        <ModalPortal>
           <div
-            className="w-full max-w-md rounded-2xl bg-white p-4 shadow-xl"
-            onClick={(e) => e.stopPropagation()}
+            className="fixed inset-0 z-[9999] flex items-end sm:items-center justify-center bg-black/40 p-4"
+            onClick={(e) => { if (e.target === e.currentTarget) setShowPicker(false); }}
+            onMouseDown={(e) => { e.preventDefault(); e.stopPropagation(); }} // กันคลิกทะลุชั้นแรก
+            aria-modal="true"
+            role="dialog"
           >
-            <div className="text-lg font-semibold">เลือกขนาด (อก/ยาว)</div>
+            <div
+              ref={modalContentRef}
+              className="w-full max-w-md rounded-2xl bg-white p-4 shadow-xl"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div className="text-lg font-semibold">เลือกขนาด (อก/ยาว)</div>
 
-            <div className="mt-3 flex flex-wrap gap-2">
-              {measureVariants.length === 0 ? (
-                <span className="text-sm text-gray-500">ยังไม่มีข้อมูล “อก/ยาว” สำหรับสินค้านี้</span>
-              ) : (
-                measureVariants.map((m) => {
-                  const left = Number(stockLeftByKey[m.key] || 0);
-                  const active = selectedKey === m.key;
-                  const canPick = left > 0;
-                  const label = `อก ${m.chest}″ / ยาว ${m.length}″`; // ← ไม่มีคำว่า "นิ้ว" ซ้ำ
-                  return (
-                    <button
-                      key={m.key}
-                      type="button"
-                      onClick={() => canPick && setSelectedKey(m.key)}
-                      disabled={!canPick}
-                      className={[
-                        'relative px-3 py-1.5 rounded-lg border text-sm transition',
-                        active
-                          ? 'bg-black text-white border-black'
-                          : canPick
-                          ? 'bg-white text-gray-800 border-gray-300 hover:bg-gray-50'
-                          : 'bg-gray-100 text-gray-400 border-gray-200 cursor-not-allowed',
-                      ].join(' ')}
-                      title={`เหลือ ${left} ชิ้น`}
-                      aria-pressed={active ? 'true' : 'false'}
-                    >
-                      {label}
-                      <span
-                        className={`ml-2 text-[11px] font-medium ${
-                          left === 0 ? 'text-red-600' : left <= 5 ? 'text-orange-500' : 'text-emerald-600'
-                        }`}
+              <div className="mt-3 flex flex-wrap gap-2">
+                {measureVariants.length === 0 ? (
+                  <span className="text-sm text-gray-500">ยังไม่มีข้อมูล “อก/ยาว” สำหรับสินค้านี้</span>
+                ) : (
+                  measureVariants.map((m) => {
+                    const left = Number(stockLeftByKey[m.key] || 0);
+                    const active = selectedKey === m.key;
+                    const canPick = left > 0;
+                    const label = `อก ${m.chest}″ / ยาว ${m.length}″`;
+                    return (
+                      <button
+                        key={m.key}
+                        type="button"
+                        onClick={() => canPick && setSelectedKey(m.key)}
+                        disabled={!canPick}
+                        className={[
+                          'relative px-3 py-1.5 rounded-lg border text-sm transition',
+                          active
+                            ? 'bg-black text-white border-black'
+                            : canPick
+                            ? 'bg-white text-gray-800 border-gray-300 hover:bg-gray-50'
+                            : 'bg-gray-100 text-gray-400 border-gray-200 cursor-not-allowed',
+                        ].join(' ')}
+                        title={`เหลือ ${left} ชิ้น`}
+                        aria-pressed={active ? 'true' : 'false'}
                       >
-                        เหลือ {left}
-                      </span>
-                    </button>
-                  );
-                })
-              )}
-            </div>
-
-            <div className="mt-4 flex gap-2 items-start">
-              <button
-                onClick={() => setShowPicker(false)}
-                className="flex-1 rounded-xl border border-gray-300 py-2.5 text-sm hover:bg-gray-50"
-              >
-                ยกเลิก
-              </button>
-              <div className="flex-1">
-                <button
-                  onClick={handleConfirm}
-                  disabled={confirmDisabled}
-                  className={`w-full rounded-xl py-2.5 text-sm text-white transition ${
-                    !confirmDisabled ? 'bg-black hover:bg-gray-800' : 'bg-gray-300 cursor-not-allowed'
-                  } ${limitHit ? 'animate-pulse' : ''}`}
-                >
-                  {!selectedKey ? 'เลือกขนาดก่อน' : leftSelected <= 0 ? 'ครบลิมิตแล้ว' : 'ยืนยันเพิ่มลงตะกร้า'}
-                </button>
-                {selectedKey && leftSelected <= 0 && (
-                  <p className="mt-2 text-xs text-red-600 font-medium">
-                    รายการนี้ในตะกร้าครบลิมิตตามสต็อกแล้ว
-                  </p>
+                        {label}
+                        <span
+                          className={`ml-2 text-[11px] font-medium ${
+                            left === 0 ? 'text-red-600' : left <= 5 ? 'text-orange-500' : 'text-emerald-600'
+                          }`}
+                        >
+                          เหลือ {left}
+                        </span>
+                      </button>
+                    );
+                  })
                 )}
+              </div>
+
+              <div className="mt-4 flex gap-2 items-start">
+                <button
+                  onClick={() => setShowPicker(false)}
+                  className="flex-1 rounded-xl border border-gray-300 py-2.5 text-sm hover:bg-gray-50"
+                >
+                  ยกเลิก
+                </button>
+                <div className="flex-1">
+                  <button
+                    onClick={handleConfirm}
+                    disabled={confirmDisabled}
+                    className={`w-full rounded-xl py-2.5 text-sm text-white transition ${
+                      !confirmDisabled ? 'bg-black hover:bg-gray-800' : 'bg-gray-300 cursor-not-allowed'
+                    } ${limitHit ? 'animate-pulse' : ''}`}
+                  >
+                    {!selectedKey ? 'เลือกขนาดก่อน' : leftSelected <= 0 ? 'ครบลิมิตแล้ว' : 'ยืนยันเพิ่มลงตะกร้า'}
+                  </button>
+                  {selectedKey && leftSelected <= 0 && (
+                    <p className="mt-2 text-xs text-red-600 font-medium">
+                      รายการนี้ในตะกร้าครบลิมิตตามสต็อกแล้ว
+                    </p>
+                  )}
+                </div>
               </div>
             </div>
           </div>
-        </div>
+        </ModalPortal>
       )}
     </div>
   );

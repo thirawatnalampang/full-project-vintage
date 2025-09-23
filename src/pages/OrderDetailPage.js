@@ -1,3 +1,4 @@
+// src/pages/OrderDetailPage.jsx
 import { useEffect, useMemo, useState, useCallback } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { useAuth } from "../context/AuthContext";
@@ -142,6 +143,99 @@ function extractShipping(o = {}) {
   return { name, phone, addressText };
 }
 
+function CancelModal({ open, order, onClose, onConfirm }) {
+  const [reason, setReason] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+
+  useEffect(() => {
+    if (open) { setReason(""); setSubmitting(false); }
+  }, [open]);
+
+  if (!open) return null;
+
+  const min = 5, max = 300;
+  const valid = reason.trim().length >= min && reason.trim().length <= max;
+
+  const submit = async () => {
+    if (!valid || submitting) return;
+    setSubmitting(true);
+    await onConfirm({
+      orderId: order?.order_id || order?.id || order?.order_code,
+      reason: reason.trim(),
+    });
+    setSubmitting(false);
+    onClose();
+  };
+
+  return (
+    // ✅ คลิกพื้นหลังปิด modal ได้
+    <div
+      className="fixed inset-0 z-[60] bg-black/40 backdrop-blur-[1px] grid place-items-center p-4"
+      onClick={onClose}
+    >
+      {/* ✅ กันคลิกทะลุเฉพาะตัวกล่อง ไม่ใช้ preventDefault ที่ overlay */}
+      <div
+        className="w-full max-w-lg rounded-2xl bg-white border shadow-xl overflow-hidden"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="px-5 py-4 border-b flex items-center justify-between">
+          <h3 className="font-semibold">ยืนยันการยกเลิกคำสั่งซื้อ</h3>
+          <button type="button" onClick={onClose} className="text-neutral-500 hover:text-black" title="ปิด">
+            <FiX size={20} />
+          </button>
+        </div>
+
+        <div className="p-5 space-y-3">
+          <div className="text-sm text-neutral-600">
+            คำสั่งซื้อ <b>#{order?.order_code || order?.id || order?.order_id}</b> จะถูกยกเลิก กรุณาระบุเหตุผล
+          </div>
+
+          <label className="block text-sm font-medium">
+            เหตุผลในการยกเลิก <span className="text-rose-600">*</span>
+          </label>
+
+          {/* ✅ เอา preventDefault ออก ให้โฟกัส/พิมพ์ได้ */}
+          <textarea
+            value={reason}
+            onChange={(e) => setReason(e.target.value)}
+            rows={4}
+            className="w-full rounded-xl border px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-black/10"
+            placeholder="เช่น ที่อยู่ผิด / สั่งซ้ำ / เปลี่ยนใจ / โอนผิด ฯลฯ"
+          />
+
+          <div className="flex items-center justify-between text-xs">
+            <span className={valid ? "text-emerald-600" : "text-rose-600"}>
+              {valid ? "พร้อมส่ง" : `พิมพ์อย่างน้อย ${min} ตัวอักษร และไม่เกิน ${max}`}
+            </span>
+            <span className="text-neutral-500">{reason.trim().length} / {max}</span>
+          </div>
+
+          <div className="bg-amber-50 border border-amber-200 text-amber-800 rounded-lg p-3 text-xs">
+            หมายเหตุ: หากร้านค้าเริ่มจัดส่งแล้ว อาจไม่สามารถยกเลิกได้
+          </div>
+        </div>
+
+        <div className="px-5 py-4 border-t flex items-center justify-end gap-2">
+          <button type="button" onClick={onClose} className="h-10 px-4 rounded-xl border hover:bg-neutral-50 text-sm" disabled={submitting}>
+            ปิด
+          </button>
+          <button
+            type="button"
+            onClick={submit}
+            disabled={!valid || submitting}
+            className={cx(
+              "h-10 px-4 rounded-xl text-white text-sm inline-flex items-center gap-2",
+              valid && !submitting ? "bg-rose-600 hover:bg-rose-700" : "bg-rose-300 cursor-not-allowed"
+            )}
+          >
+            {submitting ? "กำลังยกเลิก..." : <><FiX /> ยืนยันยกเลิก</>}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function OrderDetailPage() {
   const { user } = useAuth();
   const nav = useNavigate();
@@ -151,32 +245,31 @@ export default function OrderDetailPage() {
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState("");
 
+  // modal state
+  const [cancelOpen, setCancelOpen] = useState(false);
+
   // ลองหลาย endpoint เพื่อให้เข้ากับ backend ปัจจุบันของคุณ
   const fetchDetail = useCallback(async () => {
     setErr("");
     const candidates = [
-      `${API_BASE}/api/my-orders/${orderId}`, // แนะนำทำ endpoint นี้ฝั่ง backend
-      `${API_BASE}/api/orders/${orderId}`,    // หรือแบบทั่วไป
-      `${API_BASE}/api/admin/orders/${orderId}` // สำรอง (ถ้าอนุญาตอ่าน)
+      `${API_BASE}/api/my-orders/${orderId}`,
+      `${API_BASE}/api/orders/${orderId}`,
+      `${API_BASE}/api/admin/orders/${orderId}`
     ];
     for (const url of candidates) {
       try {
         const res = await fetch(url);
         if (!res.ok) continue;
         const data = await res.json();
-        // รองรับทั้งรูปแบบ {order, items} หรือ flat
         if (data?.order || data?.items) {
           setO({ order: data.order || data, items: data.items || data.order?.items || [] });
           return;
         }
-        // บาง backend อาจส่งเป็นแถวเดียวพร้อม items
         if (data && (data.id || data.order_id)) {
           setO({ order: data, items: data.items || [] });
           return;
         }
-      } catch (e) {
-        // ลองตัวถัดไป
-      }
+      } catch (e) { /* try next */ }
     }
     setErr("ไม่พบคำสั่งซื้อนี้ หรือคุณไม่มีสิทธิ์เข้าถึง");
   }, [orderId]);
@@ -205,13 +298,13 @@ export default function OrderDetailPage() {
     return ["pending", "ready_to_ship"].includes(s) && !o?.order?.tracking_code && !o?.order?.carrier;
   }, [o]);
 
-  async function cancelOrder() {
-    if (!window.confirm("ต้องการยกเลิกคำสั่งซื้อนี้ใช่ไหม?")) return;
+  // ยกเลิกออเดอร์ (ส่งเหตุผล)
+  async function cancelOrderWithReason(orderIdToCancel, reason) {
     try {
-      const res = await fetch(`${API_BASE}/api/orders/${orderId}/cancel`, {
+      const res = await fetch(`${API_BASE}/api/orders/${orderIdToCancel}/cancel`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ buyer_id: user?.user_id }),
+        body: JSON.stringify({ buyer_id: user?.user_id, reason: String(reason || "").trim() }),
       });
       if (!res.ok) {
         const t = await res.text();
@@ -269,6 +362,22 @@ export default function OrderDetailPage() {
           <span className={cx("px-2 py-0.5 text-xs rounded-full border inline-flex items-center gap-1", statusPillColor(od.status))}>
             <FiPackage /> {STATUS_TH[od.status] || od.status}
           </span>
+          {/* เหตุผลการยกเลิก (ถ้ามี) */}
+{od.status === "cancelled" && (
+  <div className="rounded-xl border border-rose-200 bg-rose-50 p-3">
+    <div className="text-sm font-semibold text-rose-800">เหตุผลการยกเลิก</div>
+    <div className="mt-1 text-sm text-rose-900 whitespace-pre-wrap">
+      {od.cancel_reason || "—"}
+    </div>
+    <div className="mt-1 text-xs text-rose-700/80">
+      โดย: {od.cancelled_by || "—"}
+      {od.cancelled_at && (
+        <> • เมื่อ {new Date(od.cancelled_at).toLocaleString("th-TH")}</>
+      )}
+    </div>
+  </div>
+)}
+
           <span className={cx("px-2 py-0.5 text-xs rounded-full border inline-flex items-center gap-1", payPillColor(od.payment_status))}>
             {od.payment_status === "paid" ? <FiCheckCircle /> : od.payment_status === "rejected" ? <FiX /> : <FiClock />}
             {(od.payment_method === "cod" ? "ปลายทาง" : "โอน")} • {PAYMENT_TH[od.payment_status] || "ยังไม่ชำระ"}
@@ -405,7 +514,7 @@ export default function OrderDetailPage() {
         {canCancel && (
           <div className="flex justify-end">
             <button
-              onClick={cancelOrder}
+              onClick={() => setCancelOpen(true)}
               className="inline-flex items-center gap-2 px-3 h-10 rounded-lg bg-rose-600 text-white hover:bg-rose-700"
             >
               <FiX /> ยกเลิกคำสั่งซื้อ
@@ -413,6 +522,15 @@ export default function OrderDetailPage() {
           </div>
         )}
       </div>
+
+     <CancelModal
+  open={cancelOpen}
+  order={od}
+  onClose={() => setCancelOpen(false)}
+  onConfirm={({ orderId, reason }) =>
+    cancelOrderWithReason(orderId ?? (od.order_id || od.id || od.order_code), reason)
+  }
+/>
     </div>
   );
 }
