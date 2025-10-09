@@ -11,8 +11,33 @@ const nodemailer = require('nodemailer');
 const bcrypt = require('bcrypt');
 
 const app = express();
+
+const PUBLIC_ORIGIN = process.env.PUBLIC_ORIGIN;
+// ... ใส่ฟังก์ชัน absolutizeUploads ที่คุณเขียนไว้ ...
+
+app.use((req, res, next) => {
+  const origin =
+    (PUBLIC_ORIGIN && PUBLIC_ORIGIN.replace(/\/+$/, '')) ||
+    `${req.protocol}://${req.get('host')}`;
+
+  const _json = res.json.bind(res);
+  res.json = (data) => {
+    try {
+      const patched = absolutizeUploads(data, origin);
+      return _json(patched);
+    } catch {
+      return _json(data);
+    }
+  };
+  next();
+});
+
+
 const PORT = process.env.PORT || 3000;
 const sharp = require('sharp');
+
+
+
 // ====== Config ======
 const uploadDir = "C:/Users/ADMIN/Desktop/อัพโหลดเสือผ้า/uploads";  // ✅ path เต็ม (Windows ใช้ / ได้)
 if (!fs.existsSync(uploadDir)) {
@@ -214,7 +239,7 @@ app.post('/api/send-otp', async (req, res) => {
     // กันอีเมลซ้ำ
     const exists = await pool.query('SELECT 1 FROM users WHERE email=$1', [email]);
     if (exists.rowCount > 0) {
-      return res.status(409).json({ message: 'อีเมลนี้ถูกใช้แล้ว กรุณาเข้าสู่ระบบหรือกดลืมรหัสผ่าน' });
+      return res.status(409).json({ message: 'อีเมลนี้ถูกใช้แล้ว กรุณาเข้าสู่ระบบ' });
     }
 
     // คูลดาวน์ (เฉพาะส่งสำเร็จรอบก่อน)
@@ -393,7 +418,7 @@ app.post('/api/login', async (req, res) => {
 
     // login สำเร็จ
     lastLoggedInUser = email;
-    console.log(`User เข้าสู่ระบบ: ${email}`);
+    console.log(`มีคนเข้าสู่ระบบ: ${email}`);
 
     // อย่าส่ง password กลับไป
     const { password: _ignored, ...safeUser } = user;
@@ -1065,7 +1090,7 @@ app.patch('/api/admin/orders/:id/cancel', async (req, res) => {
 // ===== util =====
 const crypto = require('crypto');
 
-const SHIPPING_THRESHOLD = 1000;
+const SHIPPING_THRESHOLD = 5000;
 const SHIPPING_FEE_STANDARD = 50;
 const SHIPPING_FEE_EXPRESS = 80;
 
@@ -1563,6 +1588,56 @@ app.patch("/api/admin/orders/:id/tracking", async (req, res) => {
     res.status(500).json({ message: "Server error" });
   }
 });
+// ==================== ORDERS API ====================
+// ==================== ORDERS API ====================
+
+// 1️⃣ GET /api/my-orders/:id (สำหรับผู้ซื้อ)
+app.get('/api/my-orders/:id', async (req, res) => {
+  try {
+    const orderId = Number(req.params.id);
+    if (!Number.isFinite(orderId))
+      return res.status(400).json({ message: 'Invalid order ID' });
+
+    const orderQuery = await pool.query('SELECT * FROM orders WHERE id=$1', [orderId]);
+    if (orderQuery.rowCount === 0)
+      return res.status(404).json({ message: 'ไม่พบคำสั่งซื้อ' });
+
+    const order = orderQuery.rows[0];
+    const itemsQuery = await pool.query('SELECT * FROM order_items WHERE order_id=$1', [orderId]);
+    return res.json({ order, items: itemsQuery.rows });
+  } catch (err) {
+    console.error('GET /api/my-orders/:id error:', err);
+    return res.status(500).json({ message: 'Server error' });
+  }
+});
+
+// 2️⃣ GET /api/orders/:id (สำรองให้ React)
+app.get('/api/orders/:id', (req, res) => {
+  // ✅ redirect ไป route ข้างบน พร้อมพารามิเตอร์ query เดิม
+  const queryString = new URLSearchParams(req.query).toString();
+  const targetUrl = `/api/my-orders/${req.params.id}${queryString ? `?${queryString}` : ''}`;
+  res.redirect(307, targetUrl); // ใช้ 307 เพื่อคง method เดิม (GET)
+});
+
+// 3️⃣ GET /api/admin/orders/:id (สำหรับแอดมิน)
+app.get('/api/admin/orders/:id', async (req, res) => {
+  try {
+    const orderId = Number(req.params.id);
+    if (!Number.isFinite(orderId))
+      return res.status(400).json({ message: 'Invalid order ID' });
+
+    const orderQuery = await pool.query('SELECT * FROM orders WHERE id=$1', [orderId]);
+    if (orderQuery.rowCount === 0)
+      return res.status(404).json({ message: 'ไม่พบคำสั่งซื้อ' });
+
+    const order = orderQuery.rows[0];
+    const itemsQuery = await pool.query('SELECT * FROM order_items WHERE order_id=$1', [orderId]);
+    return res.json({ order, items: itemsQuery.rows });
+  } catch (err) {
+    console.error('GET /api/admin/orders/:id error:', err);
+    return res.status(500).json({ message: 'Server error' });
+  }
+});
 
 app.get('/api/my-orders', async (req, res) => {
   let userId = req.query.userId;
@@ -1673,12 +1748,13 @@ app.get('/api/admin/metrics/overview', async (req, res) => {
         [from, to]
       ),
       pool.query(
-        `SELECT COUNT(DISTINCT o.user_id)::int AS customers
-           FROM orders o
-          WHERE o.status IN ${PAID_STATUSES}
-            AND o.created_at::date BETWEEN $1::date AND $2::date`,
-        [from, to]
-      ),
+  `SELECT COUNT(DISTINCT LOWER(TRIM(o.email)))::int AS customers
+     FROM orders o
+    WHERE o.status IN ${PAID_STATUSES}
+      AND o.created_at::date BETWEEN $1::date AND $2::date
+      AND COALESCE(NULLIF(TRIM(o.email), ''), '') <> ''`,
+  [from, to]
+),
     ]);
 
     res.json({
@@ -1798,13 +1874,12 @@ app.get('/api/admin/metrics/category-breakdown', async (req, res) => {
   }
 });
 
-// 5) RECENT ORDERS (10 ออเดอร์ล่าสุด + รายการสินค้า) — แนบรูปสินค้าให้ด้วย
+// 5) RECENT ORDERS (10 ออเดอร์ล่าสุด + รายการสินค้า)
 app.get('/api/admin/metrics/recent-orders', async (req, res) => {
   try {
     const [from, to] = range(req);
     const limit = Math.min(parseInt(req.query.limit || '10', 10), 50);
 
-    // base URL สำหรับประกอบลิงก์รูป (รองรับโปรโตคอล/พอร์ตปัจจุบัน)
     const baseUrl = `${req.protocol}://${req.get('host')}`;
 
     const { rows } = await pool.query(
@@ -1815,7 +1890,11 @@ app.get('/api/admin/metrics/recent-orders', async (req, res) => {
           o.user_id,
           COALESCE(o.paid_at, o.created_at) AS order_time,
           o.status,
-          COALESCE(o.shipping_method, '') AS shipping_method
+          COALESCE(o.shipping_method, '')   AS shipping_method,
+          /* 👇 เก็บ snapshot ไว้ใช้เมื่อ user หาย */
+          COALESCE(NULLIF(o.full_name, ''), NULL) AS o_full_name,
+          COALESCE(NULLIF(o.email, ''), NULL)     AS o_email,
+          COALESCE(NULLIF(o.phone, ''), NULL)     AS o_phone
         FROM orders o
         WHERE o.status IN ${PAID_STATUSES}
           AND o.created_at::date BETWEEN $1::date AND $2::date
@@ -1831,8 +1910,6 @@ app.get('/api/admin/metrics/recent-orders', async (req, res) => {
           oi.quantity,
           COALESCE(p.price, 0)::numeric AS unit_price,
           (oi.quantity * COALESCE(p.price, 0))::numeric AS line_total,
-
-          /* รูปจาก order_items ถ้าไม่มีค่อย fallback เป็นรูปใน products */
           COALESCE(NULLIF(oi.image, ''), NULLIF(p.image, '')) AS image_raw
         FROM order_items oi
         JOIN products p     ON p.id = oi.product_id
@@ -1844,10 +1921,15 @@ app.get('/api/admin/metrics/recent-orders', async (req, res) => {
         o.order_time,
         o.status,
         o.shipping_method,
+
+        /* 👇 เปลี่ยนเป็น LEFT JOIN เพื่อไม่ให้แถวหลุด */
         u.id AS user_id,
-        COALESCE(u.username, SPLIT_PART(u.email, '@', 1), 'ลูกค้า') AS buyer_name,
-        u.email,
-        u.phone,
+
+        /* 👇 ใช้ snapshot จาก orders ก่อน แล้วค่อย fallback ไป users */
+        COALESCE(o.o_full_name, u.username, SPLIT_PART(u.email, '@', 1), 'ลูกค้า') AS buyer_name,
+        COALESCE(o.o_email, u.email)  AS email,
+        COALESCE(o.o_phone, u.phone)  AS phone,
+
         (
           SELECT COALESCE(json_agg(
             json_build_object(
@@ -1857,23 +1939,24 @@ app.get('/api/admin/metrics/recent-orders', async (req, res) => {
               'quantity',      i.quantity,
               'unit_price',    i.unit_price,
               'line_total',    i.line_total,
-              /* ส่งทั้งชื่อไฟล์ดิบและ URL พร้อมใช้ */
               'image',         i.image_raw,
               'image_url',
-  CASE
-    WHEN i.image_raw IS NULL OR i.image_raw = '' THEN NULL
-    WHEN i.image_raw ~ '^https?://' THEN i.image_raw
-    WHEN i.image_raw LIKE '/%' THEN $4 || i.image_raw      -- '/uploads/xxx.jpg'
-    ELSE $4 || '/uploads/' || i.image_raw                  -- 'xxx.jpg' หรือ 'uploads/xxx.jpg'
-  END
+                CASE
+                  WHEN i.image_raw IS NULL OR i.image_raw = '' THEN NULL
+                  WHEN i.image_raw ~ '^https?://' THEN i.image_raw
+                  WHEN i.image_raw LIKE '/%' THEN $4 || i.image_raw
+                  ELSE $4 || '/uploads/' || i.image_raw
+                END
             )
             ORDER BY i.product_name
           ), '[]'::json)
           FROM items i WHERE i.order_id = o.id
         ) AS items,
+
         (SELECT SUM(i.line_total) FROM items i WHERE i.order_id = o.id)::numeric AS order_total
+
       FROM o10 o
-      JOIN users u ON u.id = o.user_id
+      LEFT JOIN users u ON u.id = o.user_id   -- ✅ เปลี่ยนเป็น LEFT JOIN
       ORDER BY o.order_time DESC NULLS LAST
       `,
       [from, to, limit, baseUrl]

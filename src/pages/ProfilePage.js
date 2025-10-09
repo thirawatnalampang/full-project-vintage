@@ -2,7 +2,7 @@ import React, { useState, useEffect, useMemo } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { FaUserCircle } from 'react-icons/fa';
 
-const SERVER_URL = 'http://localhost:3000';
+const SERVER_URL = process.env.REACT_APP_API_BASE || "http://localhost:3000";
 
 /** แยก ต./อ./จ./zipcode จากสตริงรวม */
 function parseThaiAddressParts(addr = '') {

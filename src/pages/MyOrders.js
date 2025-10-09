@@ -12,6 +12,73 @@ const FALLBACK_IMG = "https://placehold.co/48x48?text=IMG";
 
 const formatTHB = (n) =>
   new Intl.NumberFormat("th-TH", { style: "currency", currency: "THB" }).format(Number(n || 0));
+// วางไว้เหนือคอมโพเนนต์
+const num = (v) => (Number.isFinite(Number(v)) ? Number(v) : 0);
+// ===== helpers: ฟอร์แมตที่อยู่ไทย (รองรับ กทม.) =====
+function formatThaiAddressParts({
+  address_line, address_line2, detail,
+  subdistrict, district, province, postal,
+}) {
+  const isBKK = /กรุงเทพ/i.test(String(province || ""));
+  const L = isBKK
+    ? { sub: "แขวง", dist: "เขต", prov: "กรุงเทพฯ" }
+    : { sub: "ตำบล", dist: "อำเภอ", prov: "จังหวัด" };
+
+  const line1 = [address_line, address_line2, detail]
+    .filter((s) => (s ?? "").toString().trim() !== "")
+    .join(" ")
+    .trim();
+
+  const line2 = [
+    subdistrict ? `${L.sub} ${subdistrict}` : "",
+    district    ? `${L.dist} ${district}`   : "",
+  ].filter(Boolean).join(" ");
+
+  const line3 = [
+    province ? `${L.prov} ${province}` : "",
+    postal   ? String(postal)          : "",
+  ].filter(Boolean).join(" ");
+
+  return [line1, line2, line3].filter(Boolean).join("\n");
+}
+
+function totalsFromOrder(o = {}) {
+  // subtotal ของสินค้า
+  const subtotal =
+    num(o.subtotal) ||
+    num(o.items_total) ||
+    num(o.products_total) ||
+    num(o.total_before_shipping) ||
+    num(o.total_product_amount);
+
+  // ค่าส่ง
+  const shipping =
+    num(o.shipping_fee) ||
+    num(o.shipping_cost) ||
+    num(o.delivery_fee) ||
+    num(o.ship_fee);
+
+  // ส่วนลด (+ คือจำนวนเงินที่หักออก)
+  const discount =
+    num(o.discount_total) ||
+    num(o.coupon_discount) ||
+    num(o.voucher_discount);
+
+  // ค่าธรรมเนียมอื่น ๆ
+  const cod = num(o.cod_fee) || num(o.cod_cost);
+  const other = num(o.fee_total) || num(o.service_fee) || num(o.platform_fee);
+
+  // ถ้าแบ็กเอนด์มี grand/total_amount ก็ใช้ได้เลย
+  const provided =
+    num(o.grand_total) || num(o.total_amount) || num(o.total);
+
+  const computed = subtotal + shipping + cod + other - discount;
+
+  return {
+    subtotal, shipping, discount, cod, other,
+    grand: provided || computed,
+  };
+}
 
 const STATUS_TH = {
   pending: "รอดำเนินการ",
@@ -68,7 +135,7 @@ const trackingUrl = (carrier, code) => {
 
 /* ===== Stop events helper (กันคลิกไหลออกไปโดน <Link>) ===== */
 function StopBubble({ children }) {
-  const stop = (e) => { e.preventDefault(); e.stopPropagation(); };
+  const stop = (e) => e.stopPropagation(); // ❌ เอา preventDefault ออก
   return (
     <span
       onClick={stop}
@@ -163,42 +230,41 @@ function extractShipping(o = {}) {
     snap?.phone, snap?.tel, snap?.mobile
   );
 
-  const address_line = pick(o.address_line, o.address_line1, snap?.address_line, snap?.address_line1);
+  const address_line  = pick(o.address_line, o.address_line1, snap?.address_line, snap?.address_line1);
   const address_line2 = pick(o.address_line2, snap?.address_line2);
-  const detail = pick(o.address_detail, o.shipping_address_detail, snap?.address_detail);
-  const subdistrict = pick(o.subdistrict, o.tambon, snap?.subdistrict, snap?.tambon);
-  const district = pick(o.district, o.amphoe, snap?.district, snap?.amphoe);
-  const province = pick(o.province, snap?.province);
-  const postal = pick(
+  const detail        = pick(o.address_detail, o.shipping_address_detail, snap?.address_detail);
+  const subdistrict   = pick(o.subdistrict, o.tambon, snap?.subdistrict, snap?.tambon);
+  const district      = pick(o.district, o.amphoe, snap?.district, snap?.amphoe);
+  const province      = pick(o.province, snap?.province);
+  const postal        = pick(
     o.postal_code, o.postcode, o.zip, o.zipcode,
     snap?.postal_code, snap?.postcode, snap?.zip, snap?.zipcode
   );
+
   const strAddress = pick(
     o.shipping_address, o.address, o.address_full,
     o.shipping_address_text, snap?.address, snap?.address_full
   );
 
-  const lines = [];
+  // ถ้ามีสตริง address เต็มๆ อยู่แล้ว ใช้ได้เลย (แต่ยังทำความสะอาดบรรทัด)
+  let addressText;
   if (strAddress) {
-    lines.push(strAddress);
+    const cleanLines = String(strAddress)
+      .split(/\r?\n/)
+      .map((s) => s.trim())
+      .filter(Boolean);
+    addressText = cleanLines.join("\n");
   } else {
-    if (address_line) lines.push(address_line);
-    if (address_line2) lines.push(address_line2);
-    if (detail) lines.push(detail);
-    const area = [subdistrict, district, province].filter(Boolean).join(" ");
-    if (area) lines.push(area);
-    if (postal) lines.push(postal);
+    // ✅ ฟอร์แมตเป็น ตำบล/อำเภอ/จังหวัด (หรือ แขวง/เขต/กรุงเทพฯ)
+    addressText = formatThaiAddressParts({
+      address_line, address_line2, detail,
+      subdistrict, district, province, postal,
+    });
   }
 
-  const cleanLines = lines
-    .flatMap(v => String(v).split(/\r?\n/))
-    .map(s => s.trim())
-    .filter(Boolean);
-
-  const addressText = cleanLines.join("\n");
-
-  return { name, phone, addressText, lines };
+  return { name, phone, addressText, lines: addressText.split("\n") };
 }
+
 
 /* ===== Badges ===== */
 function PaymentBadge({ method, status }) {
@@ -221,42 +287,83 @@ function OrderBadge({ status }) {
     </span>
   );
 }
-
 function OrderStepper({ status }) {
   if (status === "cancelled") {
-    return (<div className="flex items-center gap-2 text-rose-700 text-sm"><FiX /> คำสั่งซื้อถูกยกเลิก</div>);
+    return (
+      <div className="flex items-center gap-2 text-rose-700 text-sm">
+        <FiX /> คำสั่งซื้อถูกยกเลิก
+      </div>
+    );
   }
+
   const idx = Math.max(0, ORDER_FLOW.indexOf(status));
+
   return (
     <div className="flex flex-col gap-1">
-      <div className="flex items-center gap-3">
+      {/* 🟢 การแก้ไข: นำ overflow-x-auto ออก และเพิ่มการ Scale ที่ปรับละเอียดขึ้น */}
+      <div
+        className="
+          flex items-center gap-1 sm:gap-3 w-full flex-nowrap
+          
+          /* 💡 Key Fix: ใช้ Transform เพื่อ Scale องค์ประกอบทั้งหมดจากซ้าย */
+          origin-left 
+          
+          /* ปรับขนาดตามความกว้างของหน้าจอที่แคบมากๆ */
+          max-[375px]:scale-[0.9] /* iPhone SE หรือจอแคบอื่นๆ */
+          max-[340px]:scale-[0.85] /* จอที่แคบกว่า 340px */
+          max-[320px]:scale-[0.8] /* จอที่แคบที่สุด */
+        "
+      >
         {ORDER_FLOW_LABELS.map((label, i) => {
           const active = i <= idx;
           return (
-            <div key={label} className="flex items-center gap-2">
+            /* 💡 Key Fix: ลด gap และเพิ่ม flex-shrink-0 */
+            <div key={label} className="flex items-center gap-1 sm:gap-2 flex-shrink-0"> 
               <div
                 className={cx(
-                  "w-6 h-6 rounded-full grid place-items-center text-xs border",
-                  active ? "bg-black text-white border-black" : "bg-white text-neutral-400 border-neutral-300"
+                  "rounded-full grid place-items-center border flex-shrink-0",
+                  /* 💡 Key Fix: ใช้ขนาด w-4 h-4 ที่เล็กที่สุดสำหรับมือถือ */
+                  "w-4 h-4 text-[10px] sm:w-6 sm:h-6 sm:text-xs", 
+                  active
+                    ? "bg-black text-white border-black"
+                    : "bg-white text-neutral-400 border-neutral-300"
                 )}
               >
                 {i + 1}
               </div>
-              <div className={cx("text-xs", active ? "text-black font-medium" : "text-neutral-400")}>{label}</div>
+
+              <div
+                className={cx(
+                  /* 💡 Key Fix: ลดขนาด font ให้เล็กที่สุดและใช้ whitespace-nowrap */
+                  "text-[10px] sm:text-xs leading-tight whitespace-nowrap", 
+                  active ? "text-black font-medium" : "text-neutral-400"
+                )}
+                title={label}
+              >
+                {label}
+              </div>
+
               {i < ORDER_FLOW_LABELS.length - 1 && (
-                <div className={cx("w-8 h-[2px]", active ? "bg-black" : "bg-neutral-200")} />
+                <div
+                  className={cx(
+                    "h-[2px] flex-shrink-0",
+                    active ? "bg-black" : "bg-neutral-200",
+                    /* 💡 Key Fix: ใช้ความกว้างเส้นเชื่อมที่สั้นที่สุด w-2 */
+                    "w-2 sm:w-8 md:w-10" 
+                  )}
+                />
               )}
             </div>
           );
         })}
       </div>
-      <div className="text-xs text-neutral-600">
+
+      <div className="text-[11px] sm:text-xs text-neutral-600">
         {`ตอนนี้อยู่ ขั้นที่ ${idx + 1} • ${ORDER_FLOW_LABELS[idx]}`}
       </div>
     </div>
   );
 }
-
 /* ===== Cancel Modal (fixed typing) ===== */
 function CancelModal({ open, order, onClose, onConfirm }) {
   const [reason, setReason] = useState("");
@@ -420,14 +527,14 @@ export default function MyOrdersPage() {
   }, [rows, statusFilter]);
 
   const summary = useMemo(() => {
-    const norm = (v) => String(v || "").toLowerCase();
-    const paidRows = rows.filter(
-      (r) => norm(r.payment_status) === "paid" && norm(r.status) !== "cancelled"
-    );
-    const totalAmount = paidRows.reduce(
-      (sum, r) => sum + Number(r.total_amount || 0),
-      0
-    );
+  const norm = (v) => String(v || "").toLowerCase();
+  const paidRows = rows.filter(
+    (r) => norm(r.payment_status) === "paid" && norm(r.status) !== "cancelled"
+  );
+  const totalAmount = paidRows.reduce(
+    (sum, r) => sum + totalsFromOrder(r).grand,
+    0
+  );
     const totalOrders = rows.length;
     const byStatus = rows.reduce((acc, r) => {
       const k = norm(r.status || "unknown");
@@ -553,6 +660,7 @@ export default function MyOrdersPage() {
           <div className="space-y-3">
             {sortedAndFiltered.map((o) => {
               const ship = extractShipping(o);
+               const t = totalsFromOrder(o);
               return (
                 <Link
                   key={o.order_id}
@@ -710,9 +818,10 @@ export default function MyOrdersPage() {
                         </button>
                       )}
 
-                      <div className="font-bold text-emerald-600 whitespace-nowrap">
-                        {formatTHB(o.total_amount)}
-                      </div>
+                     
+<div className="font-bold text-emerald-600 whitespace-nowrap">
+  {formatTHB(t.grand)}
+</div>
                     </div>
                   </div>
                 </Link>

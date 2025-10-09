@@ -4,7 +4,8 @@ import { Link } from 'react-router-dom';
 import { createPortal } from 'react-dom';
 import { useCart } from '../context/CartContext';
 
-const API_BASE = 'http://localhost:3000';
+const API_BASE = process.env.REACT_APP_API_BASE || '"http://192.168.1.35:3000"';
+
 
 // ---- Portal wrapper ----
 function ModalPortal({ children }) {

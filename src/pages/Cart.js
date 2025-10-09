@@ -6,7 +6,7 @@ import { useAuth } from '../context/AuthContext';                // ⬅️ เ�
 const formatTHB = (n) =>
   new Intl.NumberFormat('th-TH', { style: 'currency', currency: 'THB' }).format(Number(n || 0));
 
-const SHIPPING_THRESHOLD = 1000;
+const SHIPPING_THRESHOLD = 5000;
 const SHIPPING_FEE = 50;
 
 export default function CartPage() {

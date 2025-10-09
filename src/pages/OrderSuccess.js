@@ -6,6 +6,32 @@ import { FiCheckCircle, FiHome, FiFileText, FiShoppingBag } from "react-icons/fi
 const API_BASE = process.env.REACT_APP_API_BASE || "http://localhost:3000";
 const formatTHB = (n) =>
   new Intl.NumberFormat("th-TH", { style: "currency", currency: "THB" }).format(Number(n || 0));
+// ===== helpers: ฟอร์แมตที่อยู่ไทย (รองรับ กทม.) =====
+function formatThaiAddressParts({
+  address_line,        // บ้านเลขที่/หมู่/หมู่บ้าน/ถนน ฯลฯ
+  subdistrict,         // ตำบล/แขวง
+  district,            // อำเภอ/เขต
+  province,            // จังหวัด/กรุงเทพฯ
+  postal,              // รหัสไปรษณีย์
+}) {
+  const isBKK = /กรุงเทพ/i.test(String(province || ""));
+  const L = isBKK
+    ? { sub: "แขวง", dist: "เขต", prov: "กรุงเทพฯ" }
+    : { sub: "ตำบล", dist: "อำเภอ", prov: "จังหวัด" };
+
+  const line1 = (address_line || "").trim();
+  const line2 = [
+    subdistrict ? `${L.sub} ${subdistrict}` : "",
+    district    ? `${L.dist} ${district}`   : "",
+  ].filter(Boolean).join(" ");
+
+  const line3 = [
+    province ? `${L.prov} ${province}` : "",
+    postal   ? String(postal)          : "",
+  ].filter(Boolean).join(" ");
+
+  return [line1, line2, line3].filter(Boolean).join("\n");
+}
 
 export default function OrderSuccessPage() {
   const { orderId } = useParams();
@@ -185,10 +211,19 @@ export default function OrderSuccessPage() {
               <div className="text-sm space-y-0.5">
                 <div><span className="text-neutral-500">ผู้รับ:</span> {addr.fullName || "—"}</div>
                 <div><span className="text-neutral-500">เบอร์:</span> {addr.phone || "—"}</div>
-                <div className="whitespace-pre-wrap">
-                  <span className="text-neutral-500">ที่อยู่:</span>{" "}
-                  {[addr.addressLine, addr.district, addr.province, addr.postcode, addr.subdistrict].filter(Boolean).join(" ")}
-                </div>
+                <div>
+  <div className="text-neutral-500 text-sm">ที่อยู่:</div>
+  <pre className="whitespace-pre-wrap text-sm">
+    {formatThaiAddressParts({
+      address_line: addr.addressLine,
+      subdistrict : addr.subdistrict,
+      district    : addr.district,
+      province    : addr.province,
+      postal      : addr.postcode,
+    }) || "—"}
+  </pre>
+</div>
+
               </div>
             </div>
 

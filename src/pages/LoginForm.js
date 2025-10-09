@@ -2,7 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { Link, useNavigate, useLocation } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 
-const SERVER_URL = 'http://localhost:3000';
+const SERVER_URL = process.env.REACT_APP_API_BASE || "http://localhost:3000";
 
 export default function LoginPage() {
   const { login, user } = useAuth();

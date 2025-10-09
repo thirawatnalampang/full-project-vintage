@@ -1,5 +1,5 @@
 // src/pages/admin/AdminPage.jsx
-import React, {  useEffect, useMemo, useState } from "react";
+import React, {  useEffect, useMemo, useState,useCallback } from "react";
 import { Link, useNavigate,useLocation } from "react-router-dom";
 import { useAuth } from "../../context/AuthContext";
 import {
@@ -11,15 +11,17 @@ import {
 
 import {
   LineChart, Line, XAxis, YAxis, Tooltip, CartesianGrid, ResponsiveContainer,
-  BarChart, Bar, PieChart, Pie, Cell, Legend,
+  BarChart, Bar, PieChart, Pie, Cell, Legend,Label
 } from "recharts";
 
 
 
+const API_BASE = process.env.REACT_APP_API_BASE || "http://localhost:3000";
+
 const API = {
-  products: "http://localhost:3000/api/admin/products",
-  categories: "http://localhost:3000/api/admin/categories",
-  metrics: "http://localhost:3000/api/admin/metrics",
+  products:   `${API_BASE}/api/admin/products`,
+  categories: `${API_BASE}/api/admin/categories`,
+  metrics:    `${API_BASE}/api/admin/metrics`,
 };
 
 
@@ -214,20 +216,60 @@ const parseMeasureVariants = (raw) => {
     .filter((r) => r.chest !== "" && r.length !== "");
 };
 
-  // ====== ค้นหา/กรอง ======
-  const filtered = useMemo(() => {
-    const kw = q.toLowerCase().trim();
-    let items = Array.isArray(list) ? list : [];
-    if (kw) {
-      items = items.filter(
-        (i) =>
-          (i.name || "").toLowerCase().includes(kw) ||
-          (i.description || "").toLowerCase().includes(kw)
-      );
-    }
-    return items;
-  }, [q, list]);
+  // ทำ map category_id -> ชื่อหมวดหมู่ (ตัวพิมพ์เล็ก)
+const catNameById = useMemo(() => {
+  const m = {};
+  (categories || []).forEach(c => {
+    m[c.id] = (c.name || "").toLowerCase();
+  });
+  return m;
+}, [categories]);
 
+// ====== ค้นหา/กรอง ======
+const filtered = useMemo(() => {
+  const raw = (q || "").trim();
+  const kw  = raw.toLowerCase();
+  const items = Array.isArray(list) ? list : [];
+  if (!kw) return items;
+
+  // 1) ไวยากรณ์ stock: =, <=, >=, <, >
+  const mStock = raw.match(/^stock\s*(<=|>=|=|<|>)\s*(\d+)$/i);
+  if (mStock) {
+    const op  = mStock[1];
+    const val = parseInt(mStock[2], 10);
+    return items.filter((i) => {
+      const s = Number(i.stock ?? 0);
+      return op === "="  ? s === val
+           : op === "<=" ? s <= val
+           : op === ">=" ? s >= val
+           : op === "<"  ? s <  val
+           :               s >  val;
+    });
+  }
+
+  // 2) ถ้าพิมพ์เป็นตัวเลขล้วน ให้ "ลอง" จับสต๊อกเท่ากับเลขนั้นก่อน
+  if (/^\d+$/.test(raw)) {
+    const n = parseInt(raw, 10);
+    const byStock = items.filter((i) => Number(i.stock ?? 0) === n);
+    if (byStock.length) return byStock; // เจอ → ถือว่า user ตั้งใจหา stock
+  }
+
+  // 3) ค้นหาทั่วไป
+  return items.filter((i) => {
+    const name  = String(i.name || "").toLowerCase();
+    const desc  = String(i.description || "").toLowerCase();
+    const cat   = String(catNameById[i.category_id] || "").toLowerCase();
+    const price = String(i.price ?? "");
+    const stock = String(i.stock ?? "");
+    return (
+      name.includes(kw)  ||
+      desc.includes(kw)  ||
+      cat.includes(kw)   ||
+      price.includes(kw) ||
+      stock.includes(kw)
+    );
+  });
+}, [q, list, catNameById]);
   // ====== โหลดข้อมูล ======
   async function loadProducts() {
     setLoading(true);
@@ -285,7 +327,7 @@ const parseMeasureVariants = (raw) => {
     setCoverFile(null);
     setGalleryFiles([]);
     setGalleryKeep(arr); // เก็บรูปเก่าไว้ทั้งหมดก่อน
-    setPreviewCover(row.image ? `http://localhost:3000${row.image}` : "");
+    setPreviewCover(row.image ? `${API_BASE}${row.image}` : "");
     setMeasureRows(parseMeasureVariants(row));
     setDrawerOpen(true);
   }
@@ -372,7 +414,7 @@ formData.append(
             <input
               value={q}
               onChange={(e) => setQ(e.target.value)}
-              placeholder="ค้นหาชื่อ / รายละเอียด"
+              placeholder="ค้นหาชื่อ / หมวดหมู่"
               className="pl-9 pr-3 py-2 bg-neutral-900 border border-neutral-700 rounded-xl text-sm text-white placeholder-neutral-500 focus:outline-none focus:ring-2 focus:ring-neutral-600"
             />
           </div>
@@ -412,7 +454,7 @@ formData.append(
                   <td className="px-4 py-3">
                     <div className="flex items-center gap-3">
                       <img
-                        src={p.image ? `http://localhost:3000${p.image}` : "/assets/placeholder.png"}
+                        src={p.image ? `${API_BASE}${p.image}` : "/assets/placeholder.png"}
                         alt={p.name}
                         className="w-12 h-12 object-cover rounded-xl border border-neutral-800"
                       />
@@ -553,7 +595,7 @@ formData.append(
                       {galleryKeep.map((p, idx) => (
                         <div key={`old-${idx}`} className="relative">
                           <img
-                            src={`http://localhost:3000${p}`}
+                            src={`${API_BASE}${p}`}
                             alt=""
                             className="w-24 h-24 object-cover rounded-lg border border-neutral-800"
                           />
@@ -741,7 +783,7 @@ const PAY_LABELS = {
 // 1) แปลบทบาทเป็นไทย
 const ROLE_TH = {
   buyer: "ผู้ซื้อ",
-  admin: "ผู้ขาย" 
+  admin: "เเอดมิน" 
 };
 
 
@@ -781,28 +823,27 @@ function AdminCancelModal({ open, onClose, onConfirm, order }) {
   };
 
   return (
-    <div className="fixed inset-0 z-[60] bg-black/50 backdrop-blur-[1px] grid place-items-center p-4"
-         onClick={onClose}>
-      <div className="w-full max-w-lg rounded-2xl bg-white overflow-hidden"
-           onClick={(e)=>e.stopPropagation()}>
+    <div className="fixed inset-0 z-[60] bg-black/50 backdrop-blur-[1px] grid place-items-center p-4" onClick={onClose}>
+      {/* ✅ ทำพื้นหลัง/ตัวอักษรให้คอนทราสต์สูง */}
+      <div className="w-full max-w-lg rounded-2xl bg-white text-black overflow-hidden" onClick={(e)=>e.stopPropagation()}>
         <div className="px-5 py-4 border-b flex items-center justify-between">
           <h3 className="font-semibold">ยืนยันการยกเลิกคำสั่งซื้อ</h3>
           <button onClick={onClose} className="text-neutral-500 hover:text-black">✕</button>
         </div>
 
         <div className="p-5 space-y-3">
-          <div className="text-sm text-neutral-600">
+          <div className="text-sm text-neutral-700">
             คำสั่งซื้อ <b>#{order?.id || order?.order_code}</b> จะถูกยกเลิก กรุณาระบุเหตุผล (ไม่บังคับ)
           </div>
 
           <label className="block text-sm font-medium">เหตุผลในการยกเลิก</label>
-         <textarea
-  value={reason}
-  onChange={(e) => setReason(e.target.value)}
-  rows={4}
-  className="w-full rounded-xl border px-3 py-2 text-sm text-black outline-none focus:ring-2 focus:ring-black/10"
-  placeholder="เช่น ของหมด"
-/>
+          <textarea
+            value={reason}
+            onChange={(e) => setReason(e.target.value)}
+            rows={4}
+            className="w-full rounded-xl border px-3 py-2 text-sm text-black placeholder:text-neutral-400 outline-none focus:ring-2 focus:ring-black/10"
+            placeholder="เช่น ของหมด"
+          />
 
           <div className="flex items-center justify-between text-xs">
             <span className={valid ? "text-emerald-600" : "text-rose-600"}>
@@ -811,7 +852,7 @@ function AdminCancelModal({ open, onClose, onConfirm, order }) {
             <span className="text-neutral-500">{reason.trim().length} / {max}</span>
           </div>
 
-          <label className="flex items-center gap-2 text-sm">
+          <label className="flex items-center gap-2 text-sm text-neutral-800">
             <input
               type="checkbox"
               checked={restock}
@@ -822,14 +863,23 @@ function AdminCancelModal({ open, onClose, onConfirm, order }) {
         </div>
 
         <div className="px-5 py-4 border-t flex items-center justify-end gap-2">
-          <button onClick={onClose} className="h-10 px-4 rounded-xl border hover:bg-neutral-50 text-sm">
+          <button
+            onClick={onClose}
+            className="h-10 px-4 rounded-xl border border-neutral-300 text-neutral-800 hover:bg-neutral-50"
+          >
             ปิด
           </button>
+
+          {/* ✅ คงความชัดของตัวหนังสือแม้ disabled */}
           <button
             onClick={submit}
             disabled={!valid || submitting}
-            className={ "h-10 px-4 rounded-xl text-white text-sm " +
-                        (valid && !submitting ? "bg-rose-600 hover:bg-rose-700" : "bg-rose-300 cursor-not-allowed") }
+            className="
+              h-10 px-4 rounded-xl text-white text-sm font-semibold
+              bg-rose-600 hover:bg-rose-700
+              disabled:bg-rose-500 disabled:text-white disabled:cursor-not-allowed
+              disabled:opacity-100
+            "
           >
             {submitting ? "กำลังยกเลิก..." : "ยืนยันยกเลิก"}
           </button>
@@ -837,6 +887,24 @@ function AdminCancelModal({ open, onClose, onConfirm, order }) {
       </div>
     </div>
   );
+}
+// ===== helpers: ฟอร์แมตที่อยู่ภาษาไทย (รองรับ กทม.) =====
+function formatThaiAddress({ address_line, subdistrict, district, province, postcode }) {
+  const isBKK = /กรุงเทพ/i.test(String(province || ""));
+  const L = isBKK
+    ? { sub: "แขวง", dist: "เขต", prov: "กรุงเทพฯ" }
+    : { sub: "ตำบล", dist: "อำเภอ", prov: "จังหวัด" };
+
+  const line1 = (address_line || "").trim();
+  const line2 = [subdistrict ? `${L.sub} ${subdistrict}` : "", district ? `${L.dist} ${district}` : ""]
+    .filter(Boolean)
+    .join(" ");
+  const line3 = [province ? `${L.prov} ${province}` : "", postcode ? String(postcode) : ""]
+    .filter(Boolean)
+    .join(" ");
+
+  // คืนค่าเป็น string เดียว (ขึ้นบรรทัดใหม่ด้วย \n)
+  return [line1, line2, line3].filter(Boolean).join("\n");
 }
 
 function OrdersPanel() {
@@ -912,7 +980,7 @@ const pageItems = useMemo(() => {
   const start = (page - 1) * PAGE_SIZE;
   return filtered.slice(start, start + PAGE_SIZE);
 }, [filtered, page]);
-  const API_ORDERS = "http://localhost:3000/api/admin/orders";
+  const API_ORDERS = `${API_BASE}/api/admin/orders`;
 
   const CURRENCY = (n) =>
     new Intl.NumberFormat("th-TH", { style: "currency", currency: "THB" }).format(Number(n || 0));
@@ -996,21 +1064,26 @@ const PAY_LABELS = {
   const [trackingDraft, setTrackingDraft] = useState({ carrier: "", code: "" });
   const [savingTracking, setSavingTracking] = useState(false);
 
+ 
   /* ================= Data loading ================= */
-  async function loadOrders() {
-    setLoading(true);
-    try {
-      const res = await fetch(API_ORDERS);
-      const data = await res.json();
-      setOrders(Array.isArray(data) ? data : []);
-    } catch (e) {
-      console.error("loadOrders error:", e);
-      setOrders([]);
-    } finally {
-      setLoading(false);
-    }
+  const loadOrders = useCallback(async () => {
+  setLoading(true);
+  try {
+    const res = await fetch(API_ORDERS);
+    const data = await res.json();
+    setOrders(Array.isArray(data) ? data : []);
+  } catch (e) {
+    console.error("loadOrders error:", e);
+    setOrders([]);
+  } finally {
+    setLoading(false);
   }
-  useEffect(() => { loadOrders(); }, []);
+}, [API_ORDERS]); // ✅ เพิ่ม API_ORDERS
+
+
+  useEffect(() => { 
+    loadOrders(); 
+  }, [loadOrders]);
 
   const normalizeDetail = (raw) => {
     if (raw?.order) return { order: raw.order, items: Array.isArray(raw.items) ? raw.items : [] };
@@ -1348,7 +1421,7 @@ async function saveStatus() {
 
                 {o.slip_image && (
                   <a
-                    href={`http://localhost:3000${o.slip_image}`}
+                    href={`${API_BASE}${o.slip_image}`}
                     target="_blank"
                     rel="noreferrer"
                     className="ml-2 underline text-xs text-neutral-300"
@@ -1563,40 +1636,47 @@ async function saveStatus() {
               </div>
 
               {detail.order.slip_image && (
-                <div className="mt-3">
-                  <a
-                    href={`http://localhost:3000${detail.order.slip_image}`}
-                    target="_blank" rel="noreferrer"
-                    className="inline-block"
-                  >
-                    <img
-                      src={`http://localhost:3000${detail.order.slip_image}`}
-                      alt="slip"
-                      className="w-56 rounded-xl border border-neutral-800"
-                    />
-                  </a>
-                  {detail.order.payment_amount != null && (
-                    <div className="mt-2 text-sm text-neutral-300">
-                      ยอดที่แจ้งโอน: <span className="font-medium">{CURRENCY(detail.order.payment_amount)}</span>
-                    </div>
-                  )}
-                </div>
-              )}
+  <div className="mt-3">
+    <a
+      href={`${API_BASE}${detail.order.slip_image}`}
+      target="_blank"
+      rel="noreferrer"
+      className="inline-block"
+    >
+      <img
+        src={`${API_BASE}${detail.order.slip_image}`}
+        alt="slip"
+        className="w-56 rounded-xl border border-neutral-800"
+      />
+    </a>
+    {detail.order.payment_amount != null && (
+      <div className="mt-2 text-sm text-neutral-300">
+        ยอดที่แจ้งโอน: <span className="font-medium">{CURRENCY(detail.order.payment_amount)}</span>
+      </div>
+    )}
+  </div>
+)}
+
             </div>
 
             {/* ที่อยู่/การจัดส่ง */}
             <div className="grid sm:grid-cols-2 gap-4 mb-6">
               <div className="bg-neutral-900 border border-neutral-800 rounded-xl p-4">
-                <div className="text-neutral-400 text-sm mb-1">ผู้รับ</div>
-                <div className="text-white">{detail.order.full_name || "-"}</div>
-                <div className="text-neutral-300 text-sm">{detail.order.phone || "-"}</div>
-                <div className="text-neutral-300 text-sm">
-                  {(detail.order.address_line || "-")}
-                  {detail.order.subdistrict ? ` ${detail.order.subdistrict}` : ""}
-                  {detail.order.district ? ` ${detail.order.district}` : ""}
-                  {detail.order.province ? ` ${detail.order.province}` : ""}
-                  {detail.order.postcode ? ` ${detail.order.postcode}` : ""}
-                </div>
+               <div className="text-neutral-400 text-sm mb-1">ผู้รับ</div>
+<div className="text-white font-semibold text-base">
+  {detail.order.full_name || "-"}
+</div>
+<div className="text-neutral-300 text-sm">{detail.order.phone || "-"}</div>
+<pre className="text-neutral-300 text-sm mt-2 whitespace-pre-wrap leading-relaxed">
+  {formatThaiAddress({
+    address_line: detail.order.address_line,
+    subdistrict : detail.order.subdistrict,
+    district    : detail.order.district,
+    province    : detail.order.province,
+    postcode    : detail.order.postcode,
+  }) || "—"}
+</pre>
+
               </div>
 
               <div className="bg-neutral-900 border border-neutral-800 rounded-xl p-4">
@@ -1699,7 +1779,7 @@ async function saveStatus() {
                           <div className="flex items-center gap-3">
                             {it.image && (
                               <img
-                                src={`http://localhost:3000${it.image}`}
+                                src={`${API_BASE}${it.image}`}
                                 alt=""
                                 className="w-10 h-10 rounded-lg object-cover border border-neutral-800"
                               />
@@ -1815,29 +1895,51 @@ function normalizeOrders(arr) {
   }));
 }
 
-const renderPieLabel = (p) => {
+// วางไว้เหนือคอมโพเนนต์ (หรือประกาศในไฟล์เดียวกัน)
+const renderPieLabel = ({
+  cx, cy, midAngle, innerRadius, outerRadius, percent, name
+}) => {
   const RAD = Math.PI / 180;
-  const r = p.outerRadius + 18; 
-  const x = p.cx + r * Math.cos(-p.midAngle * RAD);
-  const y = p.cy + r * Math.sin(-p.midAngle * RAD);
-  const anchor = x > p.cx ? "start" : "end";
+  const r = outerRadius + 14;                 // ตำแหน่ง label ให้อยู่นอกวง
+  const x = cx + r * Math.cos(-midAngle * RAD);
+  const y = cy + r * Math.sin(-midAngle * RAD);
+  const isRight = x > cx;
 
   return (
     <text
       x={x}
       y={y}
-      textAnchor={anchor}
+      textAnchor={isRight ? "start" : "end"}
       dominantBaseline="central"
+      style={{ fill: CHART.text }}
     >
-      <tspan fill="#AAA" fontSize={12}>{p.name}</tspan>
-      <tspan dx="6" fontSize={16} fontWeight="bold" fill="#FFF" style={{ textShadow: "0 0 4px rgba(0,0,0,0.6)" }}>
-        {(p.percent * 100).toFixed(0)}%
+      {/* ชื่อหมวดเล็กลงนิด */}
+      <tspan style={{ fontSize: 11, fill: CHART.subtext, fontWeight: 500 }}>
+        {name}
+      </tspan>
+      <tspan> </tspan>
+      {/* ⬇️ เปอร์เซ็นต์เล็กลง */}
+      <tspan style={{ fontSize: 10, fontWeight: 800 }}>
+        {(percent * 100).toFixed(0)}%
       </tspan>
     </text>
   );
 };
-
-
+function useIsMobile(breakpointPx = 640) {
+  const [isMobile, setIsMobile] = useState(false);
+  useEffect(() => {
+    const mq = window.matchMedia(`(max-width: ${breakpointPx}px)`);
+    const onChange = (e) => setIsMobile(e.matches);
+    setIsMobile(mq.matches);
+    mq.addEventListener ? mq.addEventListener("change", onChange)
+                        : mq.addListener(onChange);
+    return () => {
+      mq.removeEventListener ? mq.removeEventListener("change", onChange)
+                             : mq.removeListener(onChange);
+    };
+  }, [breakpointPx]);
+  return isMobile;
+}
 function DashboardPanel() {
   const [overview, setOverview] = useState({ total_revenue: 0, orders_count: 0, customers: 0 });
   const [salesByDay, setSalesByDay] = useState([]);
@@ -1846,6 +1948,7 @@ function DashboardPanel() {
   const [recentOrders, setRecentOrders] = useState([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+  const isMobile = useIsMobile(640);
 
   // ===== helpers: image thumbs (ใน component ได้) =====
   const PLACEHOLDER = "https://placehold.co/64x64?text=IMG";
@@ -1867,6 +1970,7 @@ function DashboardPanel() {
       </div>
     );
   })() : null;
+  
   // ===== Formatters =====
   const fmtTHB = (n) =>
     new Intl.NumberFormat("th-TH", { style: "currency", currency: "THB", maximumFractionDigits: 0 }).format(Number(n || 0));
@@ -1895,6 +1999,8 @@ function DashboardPanel() {
     catch { return d; }
   };
 
+
+  
   // ===== Normalizers สำหรับกราฟ (ยังอยู่ใน component ได้) =====
   const normalizeSales = (arr) =>
     (Array.isArray(arr) ? arr : []).map((x, i) => ({
@@ -1933,7 +2039,7 @@ function DashboardPanel() {
           fetch(`${API.metrics}/sales-by-day?${query}`),
           fetch(`${API.metrics}/top-products?${query}`),
           fetch(`${API.metrics}/category-breakdown?${query}`),
-          fetch(`${API.metrics}/recent-orders?limit=10`)
+          fetch(`${API.metrics}/recent-orders?limit=15`)
         ]);
 
         const [o, d, t, c, ro] = await Promise.all([
@@ -1967,57 +2073,25 @@ function DashboardPanel() {
       }
     })();
   }, []); // ✅ ไม่มี warning อีก เพราะ normalizeOrders อยู่ "นอก" component
+const renderPieLabelMobile = ({ cx, cy, midAngle, outerRadius, percent }) => {
+  const RAD = Math.PI / 180;
+  const r = outerRadius + 6; // ใกล้วง เพื่อลดโอกาสตัดขอบ
+  const x = cx + r * Math.cos(-midAngle * RAD);
+  const y = cy + r * Math.sin(-midAngle * RAD);
+  return (
+    <text
+      x={x}
+      y={y}
+      textAnchor={x > cx ? "start" : "end"}
+      dominantBaseline="central"
+      style={{ fontSize: 10, fontWeight: 700, fill: CHART.text }}
+    >
+      {(percent * 100).toFixed(0)}%
+    </text>
+  );
+};
 
-  // ===== Fetch =====
-  useEffect(() => {
-    const query = new URLSearchParams({
-      from: `${new Date().getFullYear()}-01-01`,
-      to: "2999-12-31",
-      limit: "5",
-    }).toString();
 
-    (async () => {
-      try {
-        setLoading(true);
-        setError("");
-
-        const [oRes, dRes, tRes, cRes, roRes] = await Promise.all([
-          fetch(`${API.metrics}/overview?${query}`),
-          fetch(`${API.metrics}/sales-by-day?${query}`),
-          fetch(`${API.metrics}/top-products?${query}`),
-          fetch(`${API.metrics}/category-breakdown?${query}`),
-          fetch(`${API.metrics}/recent-orders?limit=10`)
-        ]);
-        const [o, d, t, c, ro] = await Promise.all([
-          oRes.json(), dRes.json(), tRes.json(), cRes.json(),
-          roRes.ok ? roRes.json() : Promise.resolve([]),
-        ]);
-        if (!oRes.ok || !dRes.ok || !tRes.ok || !cRes.ok) {
-          throw new Error(`metrics error: ${oRes.status}/${dRes.status}/${tRes.status}/${cRes.status}`);
-        }
-
-        setOverview({
-          total_revenue: Number(o?.total_revenue ?? o?.total ?? 0),
-          orders_count: Number(o?.orders_count ?? o?.orders ?? 0),
-          customers: Number(o?.customers ?? o?.unique_customers ?? 0),
-        });
-        setSalesByDay(normalizeSales(d));
-        setTopProducts(normalizeTop(t));
-        setByCategory(normalizeCat(c));
-        setRecentOrders(normalizeOrders(ro)); // ✅
-      } catch (err) {
-        console.error("metrics fetch error:", err);
-        setError(err?.message || "โหลดข้อมูลล้มเหลว");
-        setOverview({ total_revenue: 0, orders_count: 0, customers: 0 });
-        setSalesByDay([]);
-        setTopProducts([]);
-        setByCategory([]);
-        setRecentOrders([]);
-      } finally {
-        setLoading(false);
-      }
-    })();
-  }, []);
 
   // ===== Reusable UI =====
   const Card = ({ children }) => (
@@ -2155,42 +2229,44 @@ function DashboardPanel() {
   <div className="relative" style={{ height: 340 }}>
     {byCategory.length === 0 && <NoData />}
 
-    <ResponsiveContainer width="100%" height="100%">
-      <PieChart style={{ overflow: "visible" }}>
-        <Pie
-          data={byCategory}
-          dataKey="revenue"
-          nameKey="category"
-          cx="50%"     // ✅ กึ่งกลางแนวนอน
-          cy="50%"     // ✅ กึ่งกลางแนวตั้ง (ตรงกลางวงกลมจริง)
-          innerRadius="52%"
-          outerRadius="78%"
-          labelLine
-          label={renderPieLabel}
-        >
-          {byCategory.map((_, i) => (
-            <Cell key={i} fill={CHART.pie[i % CHART.pie.length]} />
-          ))}
-        </Pie>
-        <Tooltip content={<PieTT />} />
-        <Legend
-          layout="horizontal"
-          verticalAlign="bottom"
-          align="center"
-          wrapperStyle={{ color: CHART.text, marginTop: 40 }}
-        />
-      </PieChart>
-    </ResponsiveContainer>
+   <ResponsiveContainer width="100%" height="100%">
+  <PieChart>
+    <Pie
+  data={byCategory}
+  dataKey="revenue"
+  nameKey="category"
+  cx="50%"
+  cy="50%"
+  innerRadius={isMobile ? "40%" : "52%"}
+  outerRadius={isMobile ? "65%" : "78%"}
+  labelLine={isMobile ? { length: 6 } : { length: 10 }}
+  label={isMobile ? renderPieLabelMobile : renderPieLabel}
+>
+  {byCategory.map((_, i) => (
+    <Cell key={i} fill={CHART.pie[i % CHART.pie.length]} />
+  ))}
 
-    {/* ✅ center total (ตรงกลางวงกลมพอดี) */}
-    <div className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center">
-      <div className="text-sm font-medium" style={{ color: CHART.subtext }}>
-        รวม
-      </div>
-      <div className="text-lg font-bold mt-1" style={{ color: CHART.text }}>
-        {fmtTHB(totalCatRevenue)}
-      </div>
-    </div>
+  {/* ✅ Center label */}
+  <Label
+    value={`รวม ${fmtTHB(totalCatRevenue)}`}
+    position="center"
+    style={{ fill: CHART.text, fontSize: 14, fontWeight: "bold" }}
+  />
+</Pie>
+
+
+    <Tooltip content={<PieTT />} />
+    <Legend
+      layout="horizontal"
+      verticalAlign="bottom"
+      align="center"
+      wrapperStyle={{ color: CHART.text, marginTop: isMobile ? 28 : 40 }}
+    />
+  </PieChart>
+</ResponsiveContainer>
+
+
+
   </div>
 </Card>
 
@@ -2216,59 +2292,65 @@ function DashboardPanel() {
     const imgSrc = (it) => it.image_url || it.image || PLACEHOLDER;
 
     return (
-      <li
-        key={o.order_id}
-        className="group py-3 flex items-start gap-3 transition-colors hover:bg-neutral-800/40 rounded-xl px-2 -mx-2"
-      >
-        {/* ซ้าย: เลขออเดอร์ + เวลาคร่าวๆ */}
-        <div className="w-24 shrink-0">
-          <div className="text-xs text-neutral-400">#{o.order_id}</div>
-          <div className="text-[11px] text-neutral-500">{fmtTimeAgo(o.order_time)}</div>
-        </div>
+     <li
+  key={o.order_id}
+  className="
+    group py-3 px-2 -mx-2 rounded-xl transition-colors
+    hover:bg-neutral-800/40
+    flex sm:flex items-start gap-3
+    sm:gap-3
+    flex-col sm:flex-row          /* ✅ มือถือเรียงแนวตั้ง */
+  "
+>
+  {/* ซ้าย: เลขออเดอร์ + เวลาคร่าวๆ */}
+  <div className="w-full sm:w-24 flex sm:block justify-between sm:justify-start text-xs text-neutral-400">
+    <span>#{o.order_id}</span>
+    <span className="text-[11px] text-neutral-500 sm:block">{fmtTimeAgo(o.order_time)}</span>
+  </div>
 
-        {/* กลาง: รายการสินค้า (รูป + ชื่อ + ×จำนวน) เรียงเป็นบรรทัด */}
-        <div className="flex-1 min-w-0">
-          <div className="text-sm text-white font-medium truncate">
-            {o.buyer_name} <span className="text-neutral-400">• {o.shipping_method || "ไม่ระบุการจัดส่ง"}</span>
-          </div>
+  {/* กลาง: รายการสินค้า */}
+  <div className="flex-1 min-w-0">
+    <div className="text-sm text-white font-medium truncate">
+      {o.buyer_name}
+      <span className="text-neutral-400"> • {o.shipping_method || "ไม่ระบุการจัดส่ง"}</span>
+    </div>
 
-          {show.length > 0 ? (
-            <ul className="mt-1 space-y-1">
-              {show.map((it, idx) => (
-                <li key={idx} className="flex items-center gap-2">
-                  <img
-                    src={imgSrc(it)}
-                    alt={it.product_name || "product"}
-                    loading="lazy"
-                    className="w-8 h-8 rounded object-cover border border-neutral-700"
-                    onError={(e) => (e.currentTarget.src = PLACEHOLDER)}
-                  />
-                  <div className="text-xs text-neutral-300 truncate">
-                    {it.product_name}
-                    {it.category_name && (
-                      <span className="text-neutral-500"> • {it.category_name}</span>
-                    )}
-                    <span className="text-neutral-500"> • ×{it.quantity}</span>
-                  </div>
-                </li>
-              ))}
-              {more > 0 && (
-                <li className="text-[11px] text-neutral-400">+{more} รายการ</li>
+    {show.length > 0 ? (
+      <ul className="mt-1 space-y-1">
+        {show.map((it, idx) => (
+          <li key={idx} className="flex items-center gap-2">
+            <img
+              src={imgSrc(it)}
+              alt={it.product_name || "product"}
+              loading="lazy"
+              className="w-7 h-7 sm:w-8 sm:h-8 rounded object-cover border border-neutral-700"
+              onError={(e) => (e.currentTarget.src = PLACEHOLDER)}
+            />
+            <div className="text-[12px] sm:text-xs text-neutral-300 truncate">
+              {it.product_name}
+              {it.category_name && (
+                <span className="text-neutral-500"> • {it.category_name}</span>
               )}
-            </ul>
-          ) : (
-            <div className="text-xs text-neutral-500">ไม่มีสินค้า</div>
-          )}
-        </div>
+              <span className="text-neutral-500"> • ×{it.quantity}</span>
+            </div>
+          </li>
+        ))}
+        {more > 0 && (
+          <li className="text-[11px] text-neutral-400">+{more} รายการ</li>
+        )}
+      </ul>
+    ) : (
+      <div className="text-xs text-neutral-500">ไม่มีสินค้า</div>
+    )}
+  </div>
 
-        {/* ขวา: เวลาแน่นอน + ยอดรวม */}
-        <div className="text-right w-28 shrink-0">
-          <div className="text-xs text-neutral-400">{fmtDateTime(o.order_time)}</div>
-          <div className="text-sm text-white font-semibold tabular-nums">
-            {fmtTHB(o.order_total)}
-          </div>
-        </div>
-      </li>
+  {/* ขวา: เวลาแน่นอน + ยอดรวม */}
+  <div className="w-full sm:w-28 sm:text-right flex justify-between sm:block mt-1 sm:mt-0">
+    <div className="text-[11px] text-neutral-400">{fmtDateTime(o.order_time)}</div>
+    <div className="text-sm text-white font-semibold tabular-nums">{fmtTHB(o.order_total)}</div>
+  </div>
+</li>
+
     );
   })}
 </ul>

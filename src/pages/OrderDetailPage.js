@@ -9,7 +9,10 @@ import {
 
 const API_BASE = process.env.REACT_APP_API_BASE || "http://localhost:3000";
 const FALLBACK_IMG = "https://placehold.co/64x64?text=IMG";
-
+const CANCELLED_BY_TH = {
+  buyer: "ผู้ซื้อ",
+  admin: "เเอดมิน"
+};
 const STATUS_TH = {
   pending: "รอดำเนินการ",
   ready_to_ship: "รอจัดส่ง",
@@ -23,6 +26,33 @@ const PAYMENT_TH = {
   paid: "ชำระแล้ว",
   rejected: "สลิปถูกปฏิเสธ",
 };
+// ===== helpers: ฟอร์แมตที่อยู่ไทย (รองรับ กทม.) =====
+function formatThaiAddressParts({
+  address_line, address_line2, detail,
+  subdistrict, district, province, postal,
+}) {
+  const isBKK = /กรุงเทพ/i.test(String(province || ""));
+  const L = isBKK
+    ? { sub: "แขวง", dist: "เขต", prov: "กรุงเทพฯ" }
+    : { sub: "ตำบล", dist: "อำเภอ", prov: "จังหวัด" };
+
+  const line1 = [address_line, address_line2, detail]
+    .filter((s) => (s ?? "").toString().trim() !== "")
+    .join(" ")
+    .trim();
+
+  const line2 = [
+    subdistrict ? `${L.sub} ${subdistrict}` : "",
+    district    ? `${L.dist} ${district}`   : "",
+  ].filter(Boolean).join(" ");
+
+  const line3 = [
+    province ? `${L.prov} ${province}` : "",
+    postal   ? String(postal)          : "",
+  ].filter(Boolean).join(" ");
+
+  return [line1, line2, line3].filter(Boolean).join("\n");
+}
 
 // ===== helpers =====
 const cx = (...c) => c.filter(Boolean).join(" ");
@@ -59,13 +89,21 @@ const trackingUrl = (carrier, code) => {
 };
 
 function StopBubble({ children }) {
-  const stop = (e) => { e.preventDefault(); e.stopPropagation(); };
+  const stop = (e) => e.stopPropagation();  // ✅ เอา preventDefault ออก
   return (
-    <span onClick={stop} onMouseDown={stop} onMouseUp={stop} onTouchStart={stop} onTouchEnd={stop} className="select-text cursor-text">
+    <span
+      onClick={stop}
+      onMouseDown={stop}
+      onMouseUp={stop}
+      onTouchStart={stop}
+      onTouchEnd={stop}
+      className="select-text cursor-text"
+    >
       {children}
     </span>
   );
 }
+
 function Copyable({ text, children, className }) {
   if (!text) return null;
   const doCopy = async () => {
@@ -115,33 +153,55 @@ function OrderStepper({ status }) {
     </div>
   );
 }
-
 function extractShipping(o = {}) {
-  const snap = o.shipping_address_snapshot || o.address_snapshot || o.shipping_info || o.user_snapshot || null;
-  const pick = (...arr) => arr.find((v) => v != null && String(v).trim() !== "") || null;
+  const snap =
+    o.shipping_address_snapshot ||
+    o.address_snapshot ||
+    o.shipping_info ||
+    o.user_snapshot ||
+    null;
 
-  const name = pick(o.receiver_name, o.recipient_name, o.full_name, snap?.name, snap?.full_name);
+  const pick = (...arr) =>
+    arr.find((v) => v != null && String(v).trim() !== "") || null;
+
+  const name = pick(
+    o.receiver_name, o.recipient_name, o.full_name, o.shipping_fullname,
+    snap?.name, snap?.full_name
+  );
+
   const phone = pick(o.phone, o.receiver_phone, o.tel, snap?.phone, snap?.tel);
-  const address_line = pick(o.address_line, o.address_line1, snap?.address_line, snap?.address_line1);
+
+  const address_line  = pick(o.address_line, o.address_line1, snap?.address_line, snap?.address_line1);
   const address_line2 = pick(o.address_line2, snap?.address_line2);
-  const detail = pick(o.address_detail, snap?.address_detail);
-  const subdistrict = pick(o.subdistrict, o.tambon, snap?.subdistrict, snap?.tambon);
-  const district = pick(o.district, o.amphoe, snap?.district, snap?.amphoe);
-  const province = pick(o.province, snap?.province);
-  const postal = pick(o.postal_code, o.postcode, o.zip, snap?.postal_code, snap?.postcode, snap?.zip);
+  const detail        = pick(o.address_detail, o.shipping_address_detail, snap?.address_detail);
+  const subdistrict   = pick(o.subdistrict, o.tambon, snap?.subdistrict, snap?.tambon);
+  const district      = pick(o.district, o.amphoe, snap?.district, snap?.amphoe);
+  const province      = pick(o.province, snap?.province);
+  const postal        = pick(
+    o.postal_code, o.postcode, o.zip, snap?.postal_code, snap?.postcode, snap?.zip
+  );
 
-  const lines = [];
-  if (address_line) lines.push(address_line);
-  if (address_line2) lines.push(address_line2);
-  if (detail) lines.push(detail);
-  const area = [subdistrict, district, province].filter(Boolean).join(" ");
-  if (area) lines.push(area);
-  if (postal) lines.push(postal);
+  // ถ้าแบ็กเอนด์มี address เต็มเป็นสตริงอยู่แล้ว ใช้ได้เลย
+  const strAddress = pick(
+    o.shipping_address, o.address, o.address_full,
+    o.shipping_address_text, snap?.address, snap?.address_full
+  );
 
-  const cleanLines = lines.flatMap(v => String(v).split(/\r?\n/)).map(s => s.trim()).filter(Boolean);
-  const addressText = cleanLines.join("\n");
+  let addressText;
+  if (strAddress) {
+    addressText = String(strAddress)
+      .split(/\r?\n/).map(s => s.trim()).filter(Boolean).join("\n");
+  } else {
+    // ✅ ฟอร์แมต ตำบล/อำเภอ/จังหวัด (หรือ แขวง/เขต/กรุงเทพฯ)
+    addressText = formatThaiAddressParts({
+      address_line, address_line2, detail,
+      subdistrict, district, province, postal,
+    });
+  }
+
   return { name, phone, addressText };
 }
+
 
 function CancelModal({ open, order, onClose, onConfirm }) {
   const [reason, setReason] = useState("");
@@ -329,7 +389,7 @@ export default function OrderDetailPage() {
   if (err) {
     return (
       <div className="max-w-4xl mx-auto px-4 md:px-6 py-8">
-        <Link to="/my-orders" className="inline-flex items-center gap-2 mb-3 text-sm">
+        <Link to="/orders" className="inline-flex items-center gap-2 mb-3 text-sm">
           <FiArrowLeft /> กลับไปคำสั่งซื้อของฉัน
         </Link>
         <div className="flex items-center gap-2 text-rose-700 bg-rose-50 border border-rose-200 rounded-xl p-3">
@@ -348,7 +408,7 @@ export default function OrderDetailPage() {
   return (
     <div className="max-w-4xl mx-auto px-4 md:px-6 py-8 space-y-4">
       <div className="flex items-center justify-between">
-        <Link to="/my-orders" className="inline-flex items-center gap-2 text-sm">
+       <Link to="/orders" className="inline-flex items-center gap-2 text-sm">
           <FiArrowLeft /> กลับไปคำสั่งซื้อของฉัน
         </Link>
         <div className="text-xs text-neutral-500">
@@ -370,11 +430,22 @@ export default function OrderDetailPage() {
       {od.cancel_reason || "—"}
     </div>
     <div className="mt-1 text-xs text-rose-700/80">
-      โดย: {od.cancelled_by || "—"}
-      {od.cancelled_at && (
-        <> • เมื่อ {new Date(od.cancelled_at).toLocaleString("th-TH")}</>
-      )}
-    </div>
+  โดย: {CANCELLED_BY_TH[od.cancelled_by] || od.cancelled_by || "—"}
+  {od.cancelled_at && (
+    <>
+      {" • เมื่อ "}
+      {new Date(od.cancelled_at).toLocaleDateString("th-TH", {
+        day: "numeric",
+        month: "long",
+        year: "numeric",
+      })}{" "}
+      {new Date(od.cancelled_at).toLocaleTimeString("th-TH", {
+        hour: "2-digit",
+        minute: "2-digit",
+      })}
+    </>
+  )}
+</div>
   </div>
 )}
 
@@ -490,7 +561,7 @@ export default function OrderDetailPage() {
         {/* สรุปยอด + ปุ่ม */}
         <div className="flex flex-wrap items-end justify-between gap-3">
           <div className="text-sm text-neutral-500">
-            อัปเดตล่าสุด: {od.updated_at ? new Date(od.updated_at).toLocaleString("th-TH") : "-"}
+             {od.updated_at ? new Date(od.updated_at).toLocaleString("th-TH") : ""}
           </div>
           <div className="w-full sm:w-auto">
             <div className="rounded-xl border p-4 bg-neutral-50">

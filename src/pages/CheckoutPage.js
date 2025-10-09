@@ -9,7 +9,7 @@ const API_BASE = process.env.REACT_APP_API_BASE || 'http://localhost:3000';
 const formatTHB = (n) =>
   new Intl.NumberFormat('th-TH', { style: 'currency', currency: 'THB' }).format(Number(n || 0));
 
-const SHIPPING_THRESHOLD = 1000;
+const SHIPPING_THRESHOLD = 5000;
 const SHIPPING_FEE_STANDARD = 50;
 const SHIPPING_FEE_EXPRESS = 80;
 

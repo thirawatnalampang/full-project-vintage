@@ -3,7 +3,7 @@ import React, { useEffect, useMemo, useState, useCallback } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import { useCart } from "../context/CartContext";
 
-const API_BASE = "http://localhost:3000";
+const API_BASE = process.env.REACT_APP_API_BASE || "http://192.168.1.35:3000";
 
 function parseJsonSafe(v, fallback) {
   if (!v) return fallback;
@@ -255,29 +255,34 @@ export default function ProductDetail() {
           ) : (
             <div className="flex gap-2 flex-wrap">
               {measureVariants.map((m) => {
-                const active = selectedKey === m.key;
-                const inStock = hasStockForKey(m.key);
-                const label = `อก ${m.chest}″ / ยาว ${m.length}″`;
-                return (
-                  <button
-                    key={m.key}
-                    onClick={() => inStock && setSelectedKey(m.key)}
-                    disabled={!inStock}
-                    className={[
-                      "px-3 py-2 border rounded-lg transition text-sm",
-                      active ? "bg-black text-white border-black" : "",
-                      inStock && !active
-                        ? "bg-white text-gray-700 hover:bg-gray-100"
-                        : !inStock
-                        ? "bg-gray-100 text-gray-400 cursor-not-allowed"
-                        : "",
-                    ].join(" ")}
-                    title={inStock ? `เหลือ ${m.stock} ชิ้น` : "หมด"}
-                  >
-                    {label} {!inStock && "(หมด)"}
-                  </button>
-                );
-              })}
+  const active = selectedKey === m.key;
+  const inStock = hasStockForKey(m.key);
+  const label = `อก ${m.chest}″ / ยาว ${m.length}″`;
+  return (
+    <button
+      key={m.key}
+      onClick={() => inStock && setSelectedKey(m.key)}
+      disabled={!inStock}
+      // ✅ อ่านง่ายขึ้น แม้ disabled
+      className={[
+        "px-3 py-2 border rounded-lg transition text-sm",
+        "border-gray-300",                 // เส้นขอบอ่อนตลอด
+        "disabled:opacity-100",            // ไม่ให้ซีดลงเมื่อ disabled
+        "disabled:cursor-not-allowed",     // เคอร์เซอร์ห้ามกด
+        active && inStock
+          ? "bg-black text-white border-black"
+          : inStock
+          ? "bg-white text-gray-800 hover:bg-gray-100"
+          : "bg-gray-100 text-gray-700"    // ⬅️ สีเข้มขึ้น (ไม่จาง)
+      ].join(" ")}
+      title={inStock ? `เหลือ ${m.stock} ชิ้น` : "หมด"}
+      style={!inStock ? { opacity: 1 } : undefined}  // เผื่อโปรเจ็กต์ไม่ได้เปิด variant disabled:
+    >
+      {label} {!inStock && <span className="ml-1">(หมด)</span>}
+    </button>
+  );
+})}
+
             </div>
           )}
         </div>
