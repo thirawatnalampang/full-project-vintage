@@ -6,6 +6,10 @@ import {
   FiArrowLeft, FiAlertCircle, FiCheckCircle, FiClock, FiCopy, FiMapPin, FiPhone,
   FiPackage, FiTruck, FiUser, FiX
 } from "react-icons/fi";
+const authHeaders = () => {
+  const t = localStorage.getItem('token');
+  return t ? { Authorization: `Bearer ${t}` } : {};
+};
 
 const API_BASE = process.env.REACT_APP_API_BASE || "http://localhost:3000";
 const FALLBACK_IMG = "https://placehold.co/64x64?text=IMG";
@@ -308,32 +312,53 @@ export default function OrderDetailPage() {
   // modal state
   const [cancelOpen, setCancelOpen] = useState(false);
 
-  // ลองหลาย endpoint เพื่อให้เข้ากับ backend ปัจจุบันของคุณ
-  const fetchDetail = useCallback(async () => {
-    setErr("");
-    const candidates = [
-      `${API_BASE}/api/my-orders/${orderId}`,
-      `${API_BASE}/api/orders/${orderId}`,
-      `${API_BASE}/api/admin/orders/${orderId}`
-    ];
-    for (const url of candidates) {
-      try {
-        const res = await fetch(url);
-        if (!res.ok) continue;
-        const data = await res.json();
-        if (data?.order || data?.items) {
-          setO({ order: data.order || data, items: data.items || data.order?.items || [] });
-          return;
-        }
-        if (data && (data.id || data.order_id)) {
-          setO({ order: data, items: data.items || [] });
-          return;
-        }
-      } catch (e) { /* try next */ }
-    }
-    setErr("ไม่พบคำสั่งซื้อนี้ หรือคุณไม่มีสิทธิ์เข้าถึง");
-  }, [orderId]);
+ const fetchDetail = useCallback(async () => {
+  setErr("");
+  const token = localStorage.getItem("token");
+  // ถ้าไม่มี token ให้เด้งไป login เลย
+  if (!token) {
+    nav("/login", { state: { from: `/orders/${orderId}` } });
+    return;
+  }
 
+  const candidates = [
+    `${API_BASE}/api/my-orders/${orderId}`, // ต้องได้ด้วย token
+    `${API_BASE}/api/orders/${orderId}`,    // 307 → /api/my-orders/:id → ก็ต้องมี token
+    `${API_BASE}/api/admin/orders/${orderId}` // admin-only (อาจ 401 ได้ถ้าไม่ใช่ admin)
+  ];
+
+  for (const url of candidates) {
+    try {
+      const res = await fetch(url, {
+        headers: {
+          ...authHeaders(),
+          "Content-Type": "application/json",
+        },
+      });
+
+      if (!res.ok) {
+        // 401/403 ลองตัวถัดไป
+        if (res.status === 401 || res.status === 403) continue;
+        // อื่น ๆ พักไว้ แต่ยังลองตัวถัดไป
+        continue;
+      }
+
+      const data = await res.json();
+      if (data?.order || data?.items) {
+        setO({ order: data.order || data, items: data.items || data.order?.items || [] });
+        return;
+      }
+      if (data && (data.id || data.order_id)) {
+        setO({ order: data, items: data.items || [] });
+        return;
+      }
+    } catch (e) {
+      // ลองตัวถัดไป
+    }
+  }
+
+  setErr("ไม่พบคำสั่งซื้อนี้ หรือคุณไม่มีสิทธิ์เข้าถึง");
+}, [orderId, nav]);
   useEffect(() => {
     if (!user) {
       nav("/login", { state: { from: `/orders/${orderId}` } });
@@ -358,26 +383,38 @@ export default function OrderDetailPage() {
     return ["pending", "ready_to_ship"].includes(s) && !o?.order?.tracking_code && !o?.order?.carrier;
   }, [o]);
 
-  // ยกเลิกออเดอร์ (ส่งเหตุผล)
-  async function cancelOrderWithReason(orderIdToCancel, reason) {
-    try {
-      const res = await fetch(`${API_BASE}/api/orders/${orderIdToCancel}/cancel`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ buyer_id: user?.user_id, reason: String(reason || "").trim() }),
-      });
-      if (!res.ok) {
-        const t = await res.text();
-        alert(t || "ยกเลิกคำสั่งซื้อไม่สำเร็จ");
-        return;
-      }
-      await fetchDetail();
-      alert("ยกเลิกคำสั่งซื้อแล้ว");
-    } catch (e) {
-      alert("เกิดข้อผิดพลาดในการยกเลิก");
-    }
-  }
+ async function cancelOrderWithReason(orderIdToCancel, reason) {
+  try {
+    const res = await fetch(`${API_BASE}/api/orders/${orderIdToCancel}/cancel`, {
+      method: "PATCH",
+      headers: {
+        "Content-Type": "application/json",
+        ...authHeaders(),
+      },
+      body: JSON.stringify({
+        buyer_id: user?.user_id,
+        reason: String(reason || "").trim(),
+      }),
+    });
 
+    if (res.status === 401 || res.status === 403) {
+      alert("เซสชันหมดอายุ กรุณาเข้าสู่ระบบใหม่");
+      nav("/login", { state: { from: `/orders/${orderIdToCancel}` } });
+      return;
+    }
+
+    if (!res.ok) {
+      const t = await res.text();
+      alert(t || "ยกเลิกคำสั่งซื้อไม่สำเร็จ");
+      return;
+    }
+
+    await fetchDetail();
+    alert("ยกเลิกคำสั่งซื้อแล้ว");
+  } catch (e) {
+    alert("เกิดข้อผิดพลาดในการยกเลิก");
+  }
+}
   if (loading) {
     return (
       <div className="max-w-4xl mx-auto px-4 md:px-6 py-8">

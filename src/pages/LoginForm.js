@@ -23,39 +23,40 @@ export default function LoginPage() {
     }
   }, [user, fromPath, navigate]);
 
-  const handleLogin = async (e) => {
-    e.preventDefault();
-    if (!email.trim() || !password) {
-      alert('กรุณากรอกอีเมลและรหัสผ่าน');
-      return;
+ const handleLogin = async (e) => {
+  e.preventDefault();
+  if (!email.trim() || !password) {
+    alert('กรุณากรอกอีเมลและรหัสผ่าน');
+    return;
+  }
+
+  try {
+    setSubmitting(true);
+
+    const res = await fetch(`${SERVER_URL}/api/login`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email, password }),
+    });
+
+    const data = await res.json();
+    if (!res.ok) throw new Error(data?.message || 'Login failed');
+
+    // ✅ บันทึก token หลังล็อกอินสำเร็จ
+    if (data.token) {
+      localStorage.setItem('token', data.token);
     }
 
-    try {
-      setSubmitting(true);
+    const safeUser = { role: 'user', ...data.user };
+    login(safeUser);
 
-      const res = await fetch(`${SERVER_URL}/api/login`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email, password }),
-      });
-
-      const data = await res.json();
-      if (!res.ok) throw new Error(data?.message || 'Login failed');
-
-      // ✅ กันกรณี backend ไม่ส่ง role มา
-      const safeUser = { role: 'user', ...data.user };
-
-      // อัปเดต context -> Navbar จะอัปเดตตาม (แต่เราจะ navigate ทับทันที)
-      login(safeUser);
-
-      // ✅ เด้งไปหน้าเดิม หรือหน้าแรก โดย replace เพื่อไม่ให้ย้อนกลับมาหน้า login ด้วยปุ่ม back
-      navigate(fromPath, { replace: true });
-    } catch (err) {
-      alert('เข้าสู่ระบบไม่สำเร็จ: ' + err.message);
-    } finally {
-      setSubmitting(false);
-    }
-  };
+    navigate(fromPath, { replace: true });
+  } catch (err) {
+    alert('เข้าสู่ระบบไม่สำเร็จ: ' + err.message);
+  } finally {
+    setSubmitting(false);
+  }
+};
 
   return (
     <div className="min-h-screen grid md:grid-cols-2 bg-[#fdfaf7]">

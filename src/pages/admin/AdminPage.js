@@ -15,6 +15,25 @@ import {
 } from "recharts";
 
 
+// --- auth helpers ---
+const getToken = () => localStorage.getItem("token") || "";
+
+function authFetch(url, options = {}) {
+  const token = getToken();
+  const baseHeaders = { ...(options.headers || {}), Authorization: `Bearer ${token}` };
+  return fetch(url, { ...options, headers: baseHeaders });
+}
+
+// ใช้กับ JSON (จะใส่ Content-Type ให้เอง)
+function authFetchJSON(url, options = {}) {
+  const token = getToken();
+  const baseHeaders = {
+    "Content-Type": "application/json",
+    ...(options.headers || {}),
+    Authorization: `Bearer ${token}`,
+  };
+  return fetch(url, { ...options, headers: baseHeaders });
+}
 
 const API_BASE = process.env.REACT_APP_API_BASE || "http://localhost:3000";
 
@@ -274,7 +293,7 @@ const filtered = useMemo(() => {
   async function loadProducts() {
     setLoading(true);
     try {
-      const res = await fetch(API.products);
+      const res = await authFetch(API.products);
       const data = await res.json();
       setList(Array.isArray(data) ? data : []);
     } catch (e) {
@@ -289,7 +308,7 @@ const filtered = useMemo(() => {
   useEffect(() => {
     (async () => {
       try {
-        const res = await fetch(API.categories);
+        const res = await authFetch(API.categories);
         const data = await res.json();
         setCategories(Array.isArray(data) ? data : []);
       } catch (e) {
@@ -379,7 +398,7 @@ formData.append(
     const url = editing.id ? `${API.products}/${editing.id}` : API.products;
 
     try {
-      const res = await fetch(url, { method, body: formData });
+      const res = await authFetch(url, { method, body: formData });
       const data = await res.json();
       if (!res.ok || !data.success) {
         console.error("save failed:", data);
@@ -395,7 +414,7 @@ formData.append(
 
   async function remove(id) {
     if (!window.confirm("ลบสินค้านี้หรือไม่?")) return;
-    const res = await fetch(`${API.products}/${id}`, { method: "DELETE" });
+    const res = await authFetchJSON(`${API.products}/${id}`, { method: "DELETE" });
     if (!res.ok) return alert("ลบไม่สำเร็จ");
     await loadProducts();
   }
@@ -542,33 +561,33 @@ formData.append(
                 />
               </div>
 
-              {/* รูปหน้าปก (1 รูป) */}
-              <div>
-                <label className="block text-sm text-neutral-400 mb-1">รูปหน้าปก</label>
-                <input
-                  type="file"
-                  accept="image/*"
-                  onChange={(e) => {
-                    const f = e.target.files?.[0] || null;
-                    setCoverFile(f);
-                    setPreviewCover(
-                      f
-                        ? URL.createObjectURL(f)
-                        : editing?.image
-                        ? `http://localhost:3000${editing.image}`
-                        : ""
-                    );
-                  }}
-                  className="w-full text-neutral-300"
-                />
-                {previewCover && (
-                  <img
-                    src={previewCover}
-                    alt="cover"
-                    className="mt-3 w-36 h-36 object-cover rounded-xl border border-neutral-800"
-                  />
-                )}
-              </div>
+            {/* รูปหน้าปก (1 รูป) */}
+<div>
+  <label className="block text-sm text-neutral-400 mb-1">รูปหน้าปก</label>
+  <input
+    type="file"
+    accept="image/*"
+    onChange={(e) => {
+      const f = e.target.files?.[0] || null;
+      setCoverFile(f);
+      setPreviewCover(
+        f
+          ? URL.createObjectURL(f)
+          : editing?.image
+          ? `${API_BASE}${editing.image}`
+          : ""
+      );
+    }}
+    className="w-full text-neutral-300"
+  />
+  {previewCover && (
+    <img
+      src={previewCover}
+      alt="cover"
+      className="mt-3 w-36 h-36 object-cover rounded-xl border border-neutral-800"
+    />
+  )}
+</div>
 
               {/* แกลเลอรี (หลายรูป) */}
               <div className="mt-4">
@@ -1069,7 +1088,7 @@ const PAY_LABELS = {
   const loadOrders = useCallback(async () => {
   setLoading(true);
   try {
-    const res = await fetch(API_ORDERS);
+    const res = await authFetch(API_ORDERS);
     const data = await res.json();
     setOrders(Array.isArray(data) ? data : []);
   } catch (e) {
@@ -1096,7 +1115,7 @@ const PAY_LABELS = {
 
   async function openDetail(id) {
     try {
-      const res = await fetch(`${API_ORDERS}/${id}`);
+      const res = await authFetch(`${API_ORDERS}/${id}`);
       const raw = await res.json();
       if (!res.ok) throw new Error(raw?.message || "โหลดรายละเอียดไม่สำเร็จ");
       const data = normalizeDetail(raw);
@@ -1122,7 +1141,7 @@ async function saveStatus() {
     const restock = window.confirm('ต้องการคืนสต็อกสินค้าด้วยหรือไม่? กด OK = คืนสต็อก, Cancel = ไม่คืน');
 
     try {
-      const res = await fetch(`${API_ORDERS}/${oid}/cancel`, {
+      const res = await authFetch(`${API_ORDERS}/${oid}/cancel`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ restock }),
@@ -1144,7 +1163,7 @@ async function saveStatus() {
   // กรณีสถานะอื่น ๆ ใช้ /status ตามเดิม
   setSavingStatus(true);
   try {
-    const res = await fetch(`${API_ORDERS}/${oid}/status`, {
+    const res = await authFetch(`${API_ORDERS}/${oid}/status`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ status: statusDraft }),
@@ -1189,7 +1208,7 @@ async function saveStatus() {
     if (!oid) return;
     setPaying(true);
     try {
-      const res = await fetch(`${API_ORDERS}/${oid}/mark-paid`, {
+      const res = await authFetch(`${API_ORDERS}/${oid}/mark-paid`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({}),
@@ -1211,7 +1230,7 @@ async function saveStatus() {
     if (!window.confirm("ยืนยันปฏิเสธสลิปนี้หรือไม่?")) return;
     setRejecting(true);
     try {
-      const res = await fetch(`${API_ORDERS}/${oid}/reject-slip`, {
+      const res = await authFetch(`${API_ORDERS}/${oid}/reject-slip`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({}),
@@ -1231,7 +1250,7 @@ async function saveStatus() {
   const oid = detail?.order?.id;
   if (!oid) return;
   try {
-    const res = await fetch(`${API_ORDERS}/${oid}/cancel`, {
+    const res = await authFetch(`${API_ORDERS}/${oid}/cancel`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ restock, reason }),
@@ -1267,7 +1286,7 @@ async function saveStatus() {
         tracking_carrier: trackingDraft.carrier || null,
         tracking_code: (trackingDraft.code || "").trim() || null,
       };
-      const res = await fetch(`${API_ORDERS}/${oid}/tracking`, {
+      const res = await authFetch(`${API_ORDERS}/${oid}/tracking`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),
@@ -2035,11 +2054,11 @@ function DashboardPanel() {
         setError("");
 
         const [oRes, dRes, tRes, cRes, roRes] = await Promise.all([
-          fetch(`${API.metrics}/overview?${query}`),
-          fetch(`${API.metrics}/sales-by-day?${query}`),
-          fetch(`${API.metrics}/top-products?${query}`),
-          fetch(`${API.metrics}/category-breakdown?${query}`),
-          fetch(`${API.metrics}/recent-orders?limit=15`)
+          authFetch(`${API.metrics}/overview?${query}`),
+          authFetch(`${API.metrics}/sales-by-day?${query}`),
+          authFetch(`${API.metrics}/top-products?${query}`),
+          authFetch(`${API.metrics}/category-breakdown?${query}`),
+          authFetch(`${API.metrics}/recent-orders?limit=15`)
         ]);
 
         const [o, d, t, c, ro] = await Promise.all([
@@ -2372,7 +2391,7 @@ function UsersPanel() {
     try {
       setLoading(true);
       setErr(null);
-      const res = await fetch(`${API_BASE}/api/admin/users`);
+      const res = await authFetch(`${API_BASE}/api/admin/users`);
       if (!res.ok) throw new Error("โหลดข้อมูลผู้ใช้ไม่สำเร็จ");
       const data = await res.json();
       setUsers(Array.isArray(data) ? data : []);
@@ -2391,7 +2410,7 @@ function UsersPanel() {
   async function handleDelete(id) {
     if (!window.confirm("ยืนยันลบผู้ใช้นี้?")) return;
     try {
-      const res = await fetch(`${API_BASE}/api/admin/users/${id}`, { method: "DELETE" });
+      const res = await authFetch(`${API_BASE}/api/admin/users/${id}`, { method: "DELETE" });
       if (!res.ok) throw new Error("ลบไม่สำเร็จ");
       setUsers((prev) => prev.filter((u) => u.id !== id));
     } catch (e) {

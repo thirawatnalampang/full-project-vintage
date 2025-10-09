@@ -11,6 +11,7 @@ const nodemailer = require('nodemailer');
 const bcrypt = require('bcrypt');
 
 const app = express();
+const { requireAuth, requireAdmin } = require('./auth');
 
 const PUBLIC_ORIGIN = process.env.PUBLIC_ORIGIN;
 // ... ใส่ฟังก์ชัน absolutizeUploads ที่คุณเขียนไว้ ...
@@ -380,6 +381,7 @@ app.get('/api/users/count', async (req, res) => {
 let lastLoggedInUser = null;
 
 // ==================== ล็อกอิน (เช็กรหัสผ่าน + เช็กยืนยันอีเมล) ====================
+// ==================== ล็อกอิน (เช็กรหัสผ่าน + เช็กยืนยันอีเมล) ====================
 app.post('/api/login', async (req, res) => {
   const { email, password } = req.body || {};
   if (!email || !password) {
@@ -422,7 +424,17 @@ app.post('/api/login', async (req, res) => {
 
     // อย่าส่ง password กลับไป
     const { password: _ignored, ...safeUser } = user;
-    res.json({ message: `เข้าสู่ระบบสำเร็จ: ${email}`, user: safeUser });
+
+    // ✅ สร้าง JWT token
+    const jwt = require('jsonwebtoken');
+    const token = jwt.sign(
+      { id: user.id, email: user.email, role: user.role },
+      process.env.JWT_SECRET,
+      { expiresIn: '7d' }
+    );
+
+    // ส่งกลับทั้ง user + token
+    res.json({ message: `เข้าสู่ระบบสำเร็จ: ${email}`, user: safeUser, token });
   } catch (err) {
     console.error('Error in login:', err);
     res.status(500).json({ message: 'เกิดข้อผิดพลาดในระบบ' });
@@ -1379,7 +1391,7 @@ ORDER BY o.created_at DESC
 });
 
 // ========== 2) รายละเอียดออเดอร์ + รายการสินค้า — รวมชำระเงิน + tracking ==========
-app.get("/api/admin/orders/:id", async (req, res) => {
+app.get('/api/admin/orders/:id', requireAuth, requireAdmin, async (req, res) => {
   try {
     const { id } = req.params;
     const ordQ = `
@@ -1591,23 +1603,43 @@ app.patch("/api/admin/orders/:id/tracking", async (req, res) => {
 // ==================== ORDERS API ====================
 // ==================== ORDERS API ====================
 
-// 1️⃣ GET /api/my-orders/:id (สำหรับผู้ซื้อ)
-app.get('/api/my-orders/:id', async (req, res) => {
+// ✅ เหลืออันนี้อันเดียว
+app.get('/api/my-orders/:id', requireAuth, async (req, res) => {
   try {
     const orderId = Number(req.params.id);
-    if (!Number.isFinite(orderId))
+    if (!Number.isFinite(orderId)) {
       return res.status(400).json({ message: 'Invalid order ID' });
+    }
 
-    const orderQuery = await pool.query('SELECT * FROM orders WHERE id=$1', [orderId]);
-    if (orderQuery.rowCount === 0)
+    const userId = req.user.id; // ดึงจาก JWT
+
+    const ordQ = `
+      SELECT id, order_code, user_id, email,
+             full_name, phone, address_line, district, subdistrict, province, postcode,
+             shipping_method, payment_method,
+             subtotal, shipping, total_price, total_qty, note,
+             status, created_at,
+             payment_status, paid_at, payment_amount, slip_image,
+             tracking_carrier, tracking_code,
+             cancel_reason, cancelled_by, cancelled_at
+      FROM orders
+      WHERE id = $1 AND user_id = $2
+    `;
+    const ordR = await pool.query(ordQ, [orderId, userId]);
+    if (ordR.rowCount === 0)
       return res.status(404).json({ message: 'ไม่พบคำสั่งซื้อ' });
 
-    const order = orderQuery.rows[0];
-    const itemsQuery = await pool.query('SELECT * FROM order_items WHERE order_id=$1', [orderId]);
-    return res.json({ order, items: itemsQuery.rows });
+    const itemsQ = `
+      SELECT id, product_id, name, size, unit_price, quantity, line_total, image
+      FROM order_items
+      WHERE order_id = $1
+    `;
+    const itemsR = await pool.query(itemsQ, [orderId]);
+
+    res.json({ order: ordR.rows[0], items: itemsR.rows });
   } catch (err) {
     console.error('GET /api/my-orders/:id error:', err);
-    return res.status(500).json({ message: 'Server error' });
+    res.status(500).json({ message: 'Server error' });
   }
 });
 
@@ -1619,25 +1651,6 @@ app.get('/api/orders/:id', (req, res) => {
   res.redirect(307, targetUrl); // ใช้ 307 เพื่อคง method เดิม (GET)
 });
 
-// 3️⃣ GET /api/admin/orders/:id (สำหรับแอดมิน)
-app.get('/api/admin/orders/:id', async (req, res) => {
-  try {
-    const orderId = Number(req.params.id);
-    if (!Number.isFinite(orderId))
-      return res.status(400).json({ message: 'Invalid order ID' });
-
-    const orderQuery = await pool.query('SELECT * FROM orders WHERE id=$1', [orderId]);
-    if (orderQuery.rowCount === 0)
-      return res.status(404).json({ message: 'ไม่พบคำสั่งซื้อ' });
-
-    const order = orderQuery.rows[0];
-    const itemsQuery = await pool.query('SELECT * FROM order_items WHERE order_id=$1', [orderId]);
-    return res.json({ order, items: itemsQuery.rows });
-  } catch (err) {
-    console.error('GET /api/admin/orders/:id error:', err);
-    return res.status(500).json({ message: 'Server error' });
-  }
-});
 
 app.get('/api/my-orders', async (req, res) => {
   let userId = req.query.userId;
