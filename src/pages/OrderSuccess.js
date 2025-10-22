@@ -236,7 +236,7 @@ export default function OrderSuccessPage() {
                 </div>
                 <div>
                   <span className="text-neutral-500">วิธีจัดส่ง:</span>{" "}
-                  {summary.shippingMethod === "express" ? "ด่วน (Express)" : "ปกติ (Standard)"}
+                  {summary.shippingMethod === "express" ? "จัดส่งด่วน (Express)" : "จัดส่งธรรมดา (Standard)"}
                 </div>
                 {summary.createdAt && (
                   <div>

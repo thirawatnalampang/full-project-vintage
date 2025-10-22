@@ -102,7 +102,7 @@ export default function SearchPage() {
         <input
           value={q}
           onChange={(e) => setQ(e.target.value)}
-          placeholder="พิมพ์คำค้นหา เช่น เสื้อวง กางเกงวินเทจ ..."
+          placeholder="พิมพ์คำค้นหา เช่น เสื้อวง  ..."
           className="flex-1 border rounded-lg px-3 py-2"
         />
         <select value={sort} onChange={(e) => applyUrl({ sort: e.target.value, page: 1 })} className="border rounded-lg px-3 py-2">

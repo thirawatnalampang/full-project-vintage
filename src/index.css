@@ -1,3 +1,16 @@
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
+/* --- ทำให้ไอคอนปฏิทินเป็นสีขาว (สำหรับพื้นหลังดำ) --- */
+input[type="date"]::-webkit-calendar-picker-indicator {
+  filter: brightness(0) invert(1);
+  opacity: 1;
+}
+/* เปลี่ยนสีไอคอนปฏิทินของ input[type=month] เป็นขาว */
+input[type="month"]::-webkit-calendar-picker-indicator {
+  filter: invert(1);
+  opacity: 0.9;
+}
+input[type="month"]::-webkit-calendar-picker-indicator:hover {
+  opacity: 1;
+}

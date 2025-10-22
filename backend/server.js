@@ -1303,30 +1303,30 @@ const ordRes = await client.query(
 
       const orderId = ordRes.rows[0].id;
 
-      // บันทึก order_items (ใส่ orderId ตรงนี้)
-      const insertItem = `
-        INSERT INTO order_items (
-          order_id, product_id, name, size,
-          unit_price, price_per_unit,
-          quantity, line_total, image, variant_key, measures
-        )
-        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
-      `;
-      for (const oi of orderItems) {
-        await client.query(insertItem, [
-          orderId,
-          oi.product_id,
-          oi.name,
-          oi.size,
-          oi.unit_price,
-          oi.unit_price,
-          oi.qty,
-          oi.line_total,
-          oi.image,
-          oi.variant_key,
-          oi.measures ? JSON.stringify(oi.measures) : null,
-        ]);
-      }
+     // บันทึก order_items (ใส่ orderId ตรงนี้)
+const insertItem = `
+  INSERT INTO order_items (
+    order_id, product_id, name, size,
+    unit_price,
+    quantity, line_total, image, variant_key, measures
+  )
+  VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+`;
+
+for (const oi of orderItems) {
+  await client.query(insertItem, [
+    orderId,            // $1
+    oi.product_id,      // $2
+    oi.name,            // $3
+    oi.size,            // $4
+    oi.unit_price,      // $5
+    oi.qty,             // $6
+    oi.line_total,      // $7
+    oi.image,           // $8
+    oi.variant_key,     // $9
+    oi.measures ? JSON.stringify(oi.measures) : null, // $10
+  ]);
+}
 
       // อัปเดตสต็อกจริงใน products
       for (const pid of ids) {
@@ -1470,11 +1470,11 @@ app.patch("/api/admin/orders/:id/status", async (req, res) => {
   }
 });
 
+// ลบ txid ออกไปให้หมด เหลือแค่ amount + slip image
 app.post('/api/orders/:id/upload-slip', slipUpload, async (req, res) => {
   try {
     const { id } = req.params;
-    // ดึงจาก body ให้ชัดเจน
-    const { txid, amount } = req.body || {};
+    const { amount } = req.body || {};          // ✅ เหลือแค่นี้
 
     const f = req.files?.image?.[0] || req.files?.file?.[0];
     if (!f) return res.status(400).json({ message: 'กรุณาแนบสลิป' });
@@ -1490,20 +1490,18 @@ app.post('/api/orders/:id/upload-slip', slipUpload, async (req, res) => {
 
     const img = `/uploads/slips/${filename}`;
 
-    // ✅ ใช้ txid, amount ที่มาจาก req.body
+    // ✅ ตัด payment_txid ออก, อัปเดตเฉพาะรูป + amount + สถานะ
     const q = `
       UPDATE orders
-         SET slip_image=$1,
-             payment_txid=COALESCE($2, payment_txid),
-             payment_amount=COALESCE($3, payment_amount),
-             payment_status='submitted',
-             updated_at=NOW()
-       WHERE id=$4
-       RETURNING id, order_code, payment_status, slip_image, payment_amount, payment_txid
+         SET slip_image = $1,
+             payment_amount = COALESCE($2, payment_amount),
+             payment_status = 'submitted',
+             updated_at = NOW()
+       WHERE id = $3
+       RETURNING id, order_code, payment_status, slip_image, payment_amount
     `;
     const r = await pool.query(q, [
       img,
-      txid || null,
       amount ? Number(amount) : null,
       id
     ]);
@@ -1518,21 +1516,23 @@ app.post('/api/orders/:id/upload-slip', slipUpload, async (req, res) => {
 });
 
 // ======================== 5) แอดมินยืนยันรับเงิน (→ ready_to_ship) ========================
+// ======================== 5) แอดมินยืนยันรับเงิน (→ ready_to_ship) ========================
 app.patch('/api/admin/orders/:id/mark-paid', async (req, res) => {
   try {
     const { id } = req.params;
-    const { txid, amount } = req.body || {};
+    const { amount } = req.body || {}; // ✅ เหลือแค่ amount
+
     const q = `
       UPDATE orders
-      SET payment_status='paid',
-          paid_at=NOW(),
-          payment_txid=COALESCE($1, payment_txid),
-          payment_amount=COALESCE($2, payment_amount),
-          status='ready_to_ship'
-      WHERE id=$3
-      RETURNING id, status, payment_status, paid_at, payment_amount, payment_txid
+      SET payment_status = 'paid',
+          paid_at        = NOW(),
+          payment_amount = COALESCE($1, payment_amount),
+          status         = 'ready_to_ship'
+      WHERE id = $2
+      RETURNING id, status, payment_status, paid_at, payment_amount
     `;
-    const r = await pool.query(q, [txid || null, amount ? Number(amount) : null, id]);
+
+    const r = await pool.query(q, [amount ? Number(amount) : null, id]);
     if (r.rowCount === 0) return res.status(404).json({ message: 'ไม่พบออเดอร์' });
     res.json(r.rows[0]);
   } catch (e) {
@@ -1669,7 +1669,7 @@ app.get('/api/my-orders', async (req, res) => {
       `
       SELECT o.id AS order_id, o.order_code, o.created_at AS order_date,
              o.status, o.total_price AS total_amount,
-             o.payment_method, o.payment_status, o.slip_image, o.payment_amount,
+             o.payment_method, o.payment_status, o.slip_image, o.payment_amount,o.shipping_method,
              o.tracking_carrier AS carrier, o.tracking_code,
              o.full_name AS receiver_name, o.phone AS receiver_phone,
              o.address_line, o.subdistrict, o.district, o.province, o.postcode,
@@ -1689,7 +1689,7 @@ app.get('/api/my-orders', async (req, res) => {
     const items = await pool.query(
       `SELECT oi.id AS order_item_id, oi.order_id, oi.product_id, oi.name AS item_name,
               oi.image AS oi_image, p.image AS product_image,
-              oi.size, oi.unit_price, oi.price_per_unit, oi.quantity, oi.line_total
+              oi.size, oi.unit_price, oi.quantity, oi.line_total
        FROM order_items oi
        LEFT JOIN products p ON p.id=oi.product_id
        WHERE oi.order_id = ANY($1)
@@ -1733,47 +1733,55 @@ function range(req) {
 // นับยอดเฉพาะออเดอร์ที่ถือว่าเสร็จ/คิดเงินแล้ว
 const PAID_STATUSES = `('paid','shipped','done')`;
 
-// ใช้ยอดต่อบรรทัดแบบปลอดภัย: line_total ถ้ามีใช้เลย ไม่มีก็ quantity*price_per_unit
-const LINE_EXPR = `COALESCE(oi.line_total, oi.quantity * oi.price_per_unit)`;
+// ใช้ยอดต่อบรรทัดแบบปลอดภัย: line_total ถ้ามีใช้เลย ไม่มีก็ quantity
+const LINE_EXPR = `
+  COALESCE(
+    oi.line_total,
+    oi.unit_price * oi.quantity,
+    0
+  )::numeric
+`;
 
 /* ============ ADMIN METRICS ============ */
-
 // 1) OVERVIEW
-// GET /api/admin/metrics/overview
 app.get('/api/admin/metrics/overview', async (req, res) => {
   try {
     const [from, to] = range(req);
 
-    const [{ rows: r1 }, { rows: r2 }, { rows: r3 }] = await Promise.all([
+    const q = `
+      WITH per_order AS (
+        SELECT
+          o.id,
+          COALESCE(SUM(${LINE_EXPR}), 0) AS items_total, 
+          COALESCE(o.shipping, 0)::numeric AS shipping
+        FROM orders o
+        LEFT JOIN order_items oi ON oi.order_id = o.id
+        WHERE o.status IN ${PAID_STATUSES}
+          AND o.created_at::date BETWEEN $1::date AND $2::date
+        GROUP BY o.id, o.shipping
+      )
+      SELECT
+        COALESCE(SUM(items_total + shipping), 0) AS total_revenue,
+        COUNT(*)::int AS orders_count
+      FROM per_order
+    `;
+
+    const [agg, customersQ] = await Promise.all([
+      pool.query(q, [from, to]),
       pool.query(
-        `SELECT COALESCE(SUM(${LINE_EXPR}),0) AS total_revenue
+        `SELECT COUNT(DISTINCT LOWER(TRIM(o.email)))::int AS customers
            FROM orders o
-           JOIN order_items oi ON oi.order_id = o.id
           WHERE o.status IN ${PAID_STATUSES}
-            AND o.created_at::date BETWEEN $1::date AND $2::date`,
+            AND o.created_at::date BETWEEN $1::date AND $2::date
+            AND COALESCE(NULLIF(TRIM(o.email), ''), '') <> ''`,
         [from, to]
-      ),
-      pool.query(
-        `SELECT COUNT(*)::int AS orders_count
-           FROM orders o
-          WHERE o.status IN ${PAID_STATUSES}
-            AND o.created_at::date BETWEEN $1::date AND $2::date`,
-        [from, to]
-      ),
-      pool.query(
-  `SELECT COUNT(DISTINCT LOWER(TRIM(o.email)))::int AS customers
-     FROM orders o
-    WHERE o.status IN ${PAID_STATUSES}
-      AND o.created_at::date BETWEEN $1::date AND $2::date
-      AND COALESCE(NULLIF(TRIM(o.email), ''), '') <> ''`,
-  [from, to]
-),
+      )
     ]);
 
     res.json({
-      total_revenue: Number(r1[0]?.total_revenue || 0),
-      orders_count : Number(r2[0]?.orders_count  || 0),
-      customers    : Number(r3[0]?.customers     || 0),
+      total_revenue: Number(agg.rows[0]?.total_revenue || 0),
+      orders_count : Number(agg.rows[0]?.orders_count  || 0),
+      customers    : Number(customersQ.rows[0]?.customers || 0),
     });
   } catch (e) {
     console.error('metrics/overview error:', e);
@@ -1781,26 +1789,174 @@ app.get('/api/admin/metrics/overview', async (req, res) => {
   }
 });
 
+
+// GET /api/admin/metrics/sales-series?group=month&ym=2025-10
+app.get('/api/admin/metrics/sales-series', async (req, res) => {
+  try {
+    const group = String(req.query.group || 'day').toLowerCase(); // 'day' | 'month'
+    const range = String(req.query.range || '7d').toLowerCase();  // สำหรับ group=day: '7d' | '30d'
+    const ym    = String(req.query.ym || '').trim();              // สำหรับ group=month: 'YYYY-MM'
+
+ 
+
+    if (group === 'day') {
+      const days = range === '30d' ? 30 : 7;
+      const { rows } = await pool.query(
+        `
+        WITH dates AS (
+          SELECT generate_series(
+            (now() AT TIME ZONE 'Asia/Bangkok')::date - ($1::int - 1),
+            (now() AT TIME ZONE 'Asia/Bangkok')::date,
+            '1 day'::interval
+          )::date AS day
+        ),
+        -- รวมยอดสินค้า/ค่าส่งต่อ "ออเดอร์"
+        per_order AS (
+          SELECT
+            o.id,
+            o.created_at::date AS day,
+            COALESCE(SUM(${LINE_EXPR}), 0) AS items_total,
+            COALESCE(o.shipping, 0)::numeric AS shipping
+          FROM orders o
+          LEFT JOIN order_items oi ON oi.order_id = o.id
+          WHERE o.status IN ${PAID_STATUSES}
+          GROUP BY o.id, o.created_at::date, o.shipping
+        )
+        SELECT
+          d.day,
+          COALESCE(SUM(p.items_total), 0)                   AS subtotal,
+          COALESCE(SUM(p.shipping), 0)                      AS shipping,
+          COALESCE(SUM(p.items_total + p.shipping), 0)      AS total
+        FROM dates d
+        LEFT JOIN per_order p ON p.day = d.day
+        GROUP BY d.day
+        ORDER BY d.day;
+        `,
+        [days]
+      );
+      return res.json(rows);
+    }
+
+    if (group === 'month') {
+      const base = ym && /^\d{4}-\d{2}$/.test(ym)
+        ? ym + '-01'
+        : new Date().toLocaleString('sv-SE', { timeZone: 'Asia/Bangkok' }).slice(0, 7) + '-01';
+
+      const { rows } = await pool.query(
+        `
+        WITH bounds AS (
+          SELECT ($1::date) AS start_day,
+                 (date_trunc('month', $1::date) + interval '1 month')::date AS next_month
+        ),
+        dates AS (
+          SELECT generate_series((SELECT start_day FROM bounds),
+                                 (SELECT next_month FROM bounds) - 1,
+                                 '1 day'::interval)::date AS day
+        ),
+        per_order AS (
+          SELECT
+            o.id,
+            o.created_at::date AS day,
+            COALESCE(SUM(${LINE_EXPR}), 0) AS items_total,
+            COALESCE(o.shipping, 0)::numeric AS shipping
+          FROM orders o
+          LEFT JOIN order_items oi ON oi.order_id = o.id
+          WHERE o.status IN ${PAID_STATUSES}
+          GROUP BY o.id, o.created_at::date, o.shipping
+        )
+        SELECT
+          d.day,
+          COALESCE(SUM(p.items_total), 0)                   AS subtotal,
+          COALESCE(SUM(p.shipping), 0)                      AS shipping,
+          COALESCE(SUM(p.items_total + p.shipping), 0)      AS total
+        FROM dates d
+        LEFT JOIN per_order p ON p.day = d.day
+        GROUP BY d.day
+        ORDER BY d.day;
+        `,
+        [base]
+      );
+      return res.json(rows);
+    }
+
+    return res.status(400).json({ message: 'invalid group' });
+  } catch (e) {
+    console.error('metrics/sales-series error:', e);
+    res.status(500).json({ message: 'Server error: sales-series' });
+  }
+});
 // 2) SALES BY DAY
-// GET /api/admin/metrics/sales-by-day
 app.get('/api/admin/metrics/sales-by-day', async (req, res) => {
   try {
     const [from, to] = range(req);
-    const { rows } = await pool.query(
-      `SELECT o.created_at::date AS day,
-              SUM(${LINE_EXPR})   AS revenue
-         FROM orders o
-         JOIN order_items oi ON oi.order_id = o.id
+
+    const q = `
+      WITH per_order AS (
+        SELECT
+          o.id,
+          o.created_at::date AS day,
+          COALESCE(SUM(
+            COALESCE(
+              oi.line_total,
+              oi.unit_price * oi.quantity,
+              0
+            )
+          ), 0) AS items_total,
+          COALESCE(o.shipping, 0)::numeric AS shipping
+        FROM orders o
+        LEFT JOIN order_items oi ON oi.order_id = o.id
         WHERE o.status IN ${PAID_STATUSES}
           AND o.created_at::date BETWEEN $1::date AND $2::date
-        GROUP BY o.created_at::date
-        ORDER BY day`,
-      [from, to]
-    );
+        GROUP BY o.id, o.created_at::date, o.shipping
+      )
+      SELECT
+        day,
+        SUM(items_total)                     AS subtotal,
+        SUM(shipping)                        AS shipping,
+        SUM(items_total + shipping)          AS total
+      FROM per_order
+      GROUP BY day
+      ORDER BY day
+    `;
+    const { rows } = await pool.query(q, [from, to]);
     res.json(rows);
   } catch (e) {
     console.error('metrics/sales-by-day error:', e);
     res.status(500).json({ message: 'Server error: sales-by-day' });
+  }
+});
+app.get('/api/admin/metrics/sales-by-month', async (req, res) => {
+  const year = Number(req.query.year) || new Date().getFullYear();
+
+  const sql = `
+    WITH months AS (SELECT generate_series(1,12) AS m)
+    SELECT
+      $1::int AS year,
+      m.m     AS month,
+      COALESCE(SUM(o.total_price),0)::numeric AS revenue,
+      COUNT(DISTINCT CASE WHEN o.id      IS NOT NULL THEN o.id END)      AS orders,
+      COUNT(DISTINCT CASE WHEN o.user_id IS NOT NULL THEN o.user_id END) AS customers
+    FROM months m
+    LEFT JOIN orders o
+      ON EXTRACT(YEAR  FROM o.created_at) = $1
+     AND EXTRACT(MONTH FROM o.created_at) = m.m
+     AND o.status = 'done'
+    GROUP BY m.m
+    ORDER BY m.m;
+  `;
+
+  try {
+    const { rows } = await pool.query(sql, [year]); // 👈 ใช้ pool แทน db
+    res.json(rows.map(r => ({
+      ym: `${r.year}-${String(r.month).padStart(2,'0')}`,
+      month: Number(r.month),
+      revenue: Number(r.revenue),
+      orders: Number(r.orders),
+      customers: Number(r.customers),
+    })));
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ success:false, message:'sales-by-month query failed' });
   }
 });
 
@@ -1862,24 +2018,71 @@ app.get('/api/admin/metrics/top-products', async (req, res) => {
 app.get('/api/admin/metrics/category-breakdown', async (req, res) => {
   try {
     const [from, to] = range(req);
-    const { rows } = await pool.query(
-      `SELECT
+
+    const q = `
+      /* 1) รวมยอดต่อ "ออเดอร์-หมวด" (เฉพาะยอดสินค้า) */
+      WITH per_order_cat AS (
+        SELECT
+          o.id AS order_id,
           COALESCE(c.id, 0)                 AS category_id,
           COALESCE(c.name, 'Uncategorized') AS category,
-          SUM(oi.quantity)                   AS qty_sold,
-          SUM(${LINE_EXPR})                  AS revenue
-       FROM orders o
-       JOIN order_items oi ON oi.order_id = o.id
-       JOIN products     p ON p.id = oi.product_id
-  LEFT JOIN categories   c ON c.id = p.category_id
-      WHERE o.status IN ${PAID_STATUSES}
-        AND o.created_at::date BETWEEN $1::date AND $2::date
-      GROUP BY
-        COALESCE(c.id, 0),
-        COALESCE(c.name, 'Uncategorized')
-      ORDER BY revenue DESC`,
-      [from, to]
-    );
+          COALESCE(SUM(${LINE_EXPR}), 0)::numeric AS items_total_cat,
+          COALESCE(SUM(oi.quantity), 0)::int       AS qty_cat,
+          COALESCE(o.shipping, 0)::numeric         AS shipping
+        FROM orders o
+        JOIN order_items oi ON oi.order_id = o.id
+        JOIN products     p ON p.id = oi.product_id
+        LEFT JOIN categories c ON c.id = p.category_id
+        WHERE o.status IN ${PAID_STATUSES}
+          AND o.created_at::date BETWEEN $1::date AND $2::date
+        GROUP BY o.id, c.id, c.name, o.shipping
+      ),
+
+      /* 2) รวมยอดสินค้า "ทั้งหมดของออเดอร์" ไว้เป็นตัวหาร */
+      per_order_tot AS (
+        SELECT
+          order_id,
+          COALESCE(SUM(items_total_cat), 0)::numeric AS items_total_all
+        FROM per_order_cat
+        GROUP BY order_id
+      ),
+
+      /* 3) กระจายค่าส่งตามสัดส่วนยอดสินค้าในออเดอร์นั้น ๆ */
+      allocated AS (
+        SELECT
+          poc.category_id,
+          poc.category,
+          poc.qty_cat,
+          poc.items_total_cat,
+          /* สัดส่วน (หากทั้งออเดอร์ไม่มียอดสินค้าเลย → ให้สัดส่วนเป็น 0 เพื่อเลี่ยงหารศูนย์) */
+          CASE
+            WHEN pot.items_total_all > 0
+            THEN (poc.items_total_cat / pot.items_total_all) * poc.shipping
+            ELSE 0
+          END AS shipping_alloc,
+          /* รายได้รวมต่อหมวด = ยอดสินค้า + ค่าส่งที่จัดสรร */
+          (poc.items_total_cat
+             + CASE WHEN pot.items_total_all > 0
+                    THEN (poc.items_total_cat / pot.items_total_all) * poc.shipping
+                    ELSE 0
+               END
+          ) AS revenue
+        FROM per_order_cat poc
+        JOIN per_order_tot pot ON pot.order_id = poc.order_id
+      )
+
+      /* 4) สรุปรวมเป็นรายหมวด */
+      SELECT
+        category_id,
+        category,
+        SUM(qty_cat)::int           AS qty_sold,
+        COALESCE(SUM(revenue), 0)   AS revenue
+      FROM allocated
+      GROUP BY category_id, category
+      ORDER BY revenue DESC;
+    `;
+
+    const { rows } = await pool.query(q, [from, to]);
     res.json(rows);
   } catch (e) {
     console.error('metrics/category-breakdown error:', e);
@@ -1887,12 +2090,13 @@ app.get('/api/admin/metrics/category-breakdown', async (req, res) => {
   }
 });
 
+
+// 5) RECENT ORDERS (10 ออเดอร์ล่าสุด + รายการสินค้า)
 // 5) RECENT ORDERS (10 ออเดอร์ล่าสุด + รายการสินค้า)
 app.get('/api/admin/metrics/recent-orders', async (req, res) => {
   try {
     const [from, to] = range(req);
     const limit = Math.min(parseInt(req.query.limit || '10', 10), 50);
-
     const baseUrl = `${req.protocol}://${req.get('host')}`;
 
     const { rows } = await pool.query(
@@ -1904,10 +2108,16 @@ app.get('/api/admin/metrics/recent-orders', async (req, res) => {
           COALESCE(o.paid_at, o.created_at) AS order_time,
           o.status,
           COALESCE(o.shipping_method, '')   AS shipping_method,
-          /* 👇 เก็บ snapshot ไว้ใช้เมื่อ user หาย */
+
+          /* snapshot เผื่อ user ถูกลบ */
           COALESCE(NULLIF(o.full_name, ''), NULL) AS o_full_name,
           COALESCE(NULLIF(o.email, ''), NULL)     AS o_email,
-          COALESCE(NULLIF(o.phone, ''), NULL)     AS o_phone
+          COALESCE(NULLIF(o.phone, ''), NULL)     AS o_phone,
+
+          /* ✅ ฟิลด์ราคา */
+          COALESCE(o.subtotal, 0)      AS subtotal,
+          COALESCE(o.shipping, 0)      AS shipping,
+          COALESCE(o.total_price, 0)   AS total_price
         FROM orders o
         WHERE o.status IN ${PAID_STATUSES}
           AND o.created_at::date BETWEEN $1::date AND $2::date
@@ -1921,24 +2131,25 @@ app.get('/api/admin/metrics/recent-orders', async (req, res) => {
           p.name AS product_name,
           c.name AS category_name,
           oi.quantity,
-          COALESCE(p.price, 0)::numeric AS unit_price,
-          (oi.quantity * COALESCE(p.price, 0))::numeric AS line_total,
-          COALESCE(NULLIF(oi.image, ''), NULLIF(p.image, '')) AS image_raw
-        FROM order_items oi
-        JOIN products p     ON p.id = oi.product_id
-   LEFT JOIN categories c   ON c.id = p.category_id
-        WHERE oi.order_id IN (SELECT id FROM o10)
-      )
+          COALESCE(oi.unit_price, p.price, 0)::numeric AS unit_price,
+    COALESCE(
+      oi.line_total,
+      oi.quantity * COALESCE(oi.unit_price, p.price, 0),
+      0
+    )::numeric AS line_total,
+    COALESCE(NULLIF(oi.image, ''), NULLIF(p.image, '')) AS image_raw
+  FROM order_items oi
+  JOIN products p     ON p.id = oi.product_id
+  LEFT JOIN categories c ON c.id = p.category_id
+  WHERE oi.order_id IN (SELECT id FROM o10)
+)
       SELECT
         o.id AS order_id,
         o.order_time,
         o.status,
         o.shipping_method,
 
-        /* 👇 เปลี่ยนเป็น LEFT JOIN เพื่อไม่ให้แถวหลุด */
         u.id AS user_id,
-
-        /* 👇 ใช้ snapshot จาก orders ก่อน แล้วค่อย fallback ไป users */
         COALESCE(o.o_full_name, u.username, SPLIT_PART(u.email, '@', 1), 'ลูกค้า') AS buyer_name,
         COALESCE(o.o_email, u.email)  AS email,
         COALESCE(o.o_phone, u.phone)  AS phone,
@@ -1966,10 +2177,11 @@ app.get('/api/admin/metrics/recent-orders', async (req, res) => {
           FROM items i WHERE i.order_id = o.id
         ) AS items,
 
-        (SELECT SUM(i.line_total) FROM items i WHERE i.order_id = o.id)::numeric AS order_total
+        /* ✅ ใช้ total_price จากตาราง orders โดยตรง */
+        o.total_price::numeric AS order_total
 
       FROM o10 o
-      LEFT JOIN users u ON u.id = o.user_id   -- ✅ เปลี่ยนเป็น LEFT JOIN
+      LEFT JOIN users u ON u.id = o.user_id
       ORDER BY o.order_time DESC NULLS LAST
       `,
       [from, to, limit, baseUrl]
@@ -1989,7 +2201,7 @@ app.get('/api/products/search', async (req, res) => {
     const qRaw  = String(req.query.q || '').trim();
     const page  = Math.max(1, parseInt(req.query.page || '1', 10));
     const limit = Math.min(100, Math.max(1, parseInt(req.query.limit || '24', 10)));
-    const sort  = String(req.query.sort || 'relevance');
+    const sort  = String(req.query.sort || 'relevance').toLowerCase();
 
     if (!qRaw) return res.json({ items: [], total: 0, page, limit });
 
@@ -1997,13 +2209,14 @@ app.get('/api/products/search', async (req, res) => {
     const likeFront = `${qRaw}%`;
     const offset    = (page - 1) * limit;
 
+    // --- ORDER BY ---
     let orderBy = '';
     switch (sort) {
       case 'newest':     orderBy = 'p.created_at DESC NULLS LAST'; break;
       case 'price_asc':  orderBy = 'p.price ASC NULLS LAST'; break;
       case 'price_desc': orderBy = 'p.price DESC NULLS LAST'; break;
       case 'name_asc':   orderBy = 'p.name ASC NULLS LAST'; break;
-      default:
+      default: // relevance
         orderBy = `
           CASE
             WHEN p.name ILIKE $2 THEN 0
@@ -2020,6 +2233,7 @@ app.get('/api/products/search', async (req, res) => {
        COALESCE(c.name,'') ILIKE $1)
     `;
 
+    // --- นับผลลัพธ์ ---
     const countSql = `
       SELECT COUNT(*)::int AS cnt
       FROM products p
@@ -2029,30 +2243,46 @@ app.get('/api/products/search', async (req, res) => {
     const countRes = await client.query(countSql, [likeFull]);
     const total = Number(countRes.rows?.[0]?.cnt || 0);
 
-    const listSql = `
-      SELECT
-        p.id   AS product_id,
-        p.name,
-        p.price,
-        p.image AS image,
-        c.name AS category_name
-      FROM products p
-      LEFT JOIN categories c ON c.id = p.category_id
-      WHERE ${where}
-      ORDER BY ${orderBy}
-      LIMIT $3 OFFSET $4
-    `;
-    const listParams = [likeFull, likeFront, limit, offset];
-    const listRes = await client.query(listSql, listParams);
+    // --- สร้าง LIMIT/OFFSET ให้สัมพันธ์กับจำนวนพารามิเตอร์จริง ---
+    let listSql, listParams;
 
+    if (sort === 'relevance') {
+      // ใช้ $1, $2, $3, $4
+      listSql = `
+        SELECT
+          p.id AS product_id, p.name, p.price, p.image, c.name AS category_name
+        FROM products p
+        LEFT JOIN categories c ON c.id = p.category_id
+        WHERE ${where}
+        ORDER BY ${orderBy}
+        LIMIT $3 OFFSET $4
+      `;
+      listParams = [likeFull, likeFront, limit, offset];
+    } else {
+      // ไม่มี $2 ใน ORDER BY → ใช้ $1, $2, $3 เท่านั้น
+      listSql = `
+        SELECT
+          p.id AS product_id, p.name, p.price, p.image, c.name AS category_name
+        FROM products p
+        LEFT JOIN categories c ON c.id = p.category_id
+        WHERE ${where}
+        ORDER BY ${orderBy}
+        LIMIT $2 OFFSET $3
+      `;
+      listParams = [likeFull, limit, offset];
+    }
+
+    const listRes = await client.query(listSql, listParams);
     res.json({ items: listRes.rows, total, page, limit });
   } catch (err) {
     console.error('search error:', err);
-    res.status(500).json({ error: 'search_failed' });
+    // แนะนำให้ส่ง 400 ถ้าเป็นพารามิเตอร์ผิด แต่อย่างน้อย log ให้เห็นสาเหตุ
+    res.status(500).json({ error: 'search_failed', message: String(err?.message || err) });
   } finally {
     client.release();
   }
 });
+
 
 // ==================== USERS API ====================
 

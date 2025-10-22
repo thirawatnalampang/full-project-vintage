@@ -58,11 +58,7 @@ function totalsFromOrder(o = {}) {
     num(o.delivery_fee) ||
     num(o.ship_fee);
 
-  // ส่วนลด (+ คือจำนวนเงินที่หักออก)
-  const discount =
-    num(o.discount_total) ||
-    num(o.coupon_discount) ||
-    num(o.voucher_discount);
+ 
 
   // ค่าธรรมเนียมอื่น ๆ
   const cod = num(o.cod_fee) || num(o.cod_cost);
@@ -72,10 +68,10 @@ function totalsFromOrder(o = {}) {
   const provided =
     num(o.grand_total) || num(o.total_amount) || num(o.total);
 
-  const computed = subtotal + shipping + cod + other - discount;
+  const computed = subtotal + shipping + cod + other ;
 
   return {
-    subtotal, shipping, discount, cod, other,
+    subtotal, shipping, cod, other,
     grand: provided || computed,
   };
 }
@@ -93,6 +89,49 @@ const PAYMENT_TH = {
   paid: "ชำระแล้ว",
   rejected: "สลิปถูกปฏิเสธ",
 };
+// ===== shipping label helpers =====
+const SHIP_METHOD_TH = { standard: "จัดส่งธรรมดา", express: "จัดส่งด่วน" };
+
+function shipLabelOf(raw) {
+  const k = String(raw || "").trim().toLowerCase();
+  if (!k) return "";
+  if (k === "express" || k === "exp" || k.includes("express") || k.includes("ems")) return "จัดส่งด่วน";
+  if (k === "standard" || k === "std" || k.includes("normal")) return "จัดส่งธรรมดา";
+  return SHIP_METHOD_TH[k] || "";
+}
+function orderShipMethod(o = {}) {
+  const direct =
+    o.shipping_method ||
+    o.ship_method ||
+    o.delivery_method ||
+    o.method ||
+    o.shipping?.method ||
+    o.shipping_info?.method ||
+    o.shipping_address_snapshot?.method ||
+    o.address_snapshot?.method ||
+    o.shipping;
+
+  if (shipLabelOf(direct)) return shipLabelOf(direct);
+
+  const svc =
+    o.shipping_service ||
+    o.service ||
+    o.shipping_info?.service ||
+    o.shipping_address_snapshot?.service;
+  if (shipLabelOf(svc)) return shipLabelOf(svc);
+
+  const carrier =
+    o.carrier ||
+    o.tracking_carrier ||
+    o.shipping_info?.carrier ||
+    o.shipping_address_snapshot?.carrier;
+  if (shipLabelOf(carrier)) return shipLabelOf(carrier);
+
+  const track = o.tracking_code || o.tracking_no || o.tracking;
+  if (typeof track === "string" && /^[Ee]/.test(track)) return "จัดส่งด่วน";
+
+  return "";
+}
 
 // utils
 const cx = (...c) => c.filter(Boolean).join(" ");
@@ -121,15 +160,26 @@ const resolveImg = (v) => {
   if (s.startsWith("/")) return `${API_BASE}${s}`; // path เริ่มด้วย /
   return `${API_BASE}/${s}`;                      // ชื่อไฟล์ / path สั้น
 };
+
+/* ===== Tracking helpers ===== */
 /* ===== Tracking helpers ===== */
 const trackingUrl = (carrier, code) => {
   if (!code) return null;
   const c = String(carrier || "").toLowerCase();
   const q = encodeURIComponent(code);
-  if (c.includes("kerry")) return `https://th.kerryexpress.com/th/track/?track=${q}`;
-  if (c.includes("thai") || c.includes("ems")) return `https://track.thailandpost.co.th/?trackNumber=${q}`;
-  if (c.includes("j&t") || c.includes("jnt")) return `https://www.jtexpress.co.th/index/query/gzquery.html?billcode=${q}`;
-  if (c.includes("flash")) return `https://www.flashexpress.com/fle/tracking?se=${q}`;
+
+  if (c.includes("kerry"))
+    return `https://th.kerryexpress.com/th/track/?track=${q}`;
+  if (c.includes("thai") || c.includes("ems"))
+    return `https://track.thailandpost.co.th/?trackNumber=${q}`;
+  if (c.includes("j&t") || c.includes("jnt"))
+    return `https://www.jtexpress.co.th/index/query/gzquery.html?billcode=${q}`;
+  if (c.includes("flash"))
+    return `https://www.flashexpress.com/fle/tracking?se=${q}`;
+  if (c.includes("best"))
+    return `https://www.best-inc.co.th/track?bills=${q}`;
+  if (c.includes("ninja") || c.includes("ninjavan"))
+    return `https://www.ninjavan.co/th-th/tracking?id=${q}`;
   return `https://www.google.com/search?q=${encodeURIComponent(`${carrier || ""} ${code}`)}`;
 };
 
@@ -661,6 +711,7 @@ export default function MyOrdersPage() {
             {sortedAndFiltered.map((o) => {
               const ship = extractShipping(o);
                const t = totalsFromOrder(o);
+               const shipLabel = orderShipMethod(o); 
               return (
                 <Link
                   key={o.order_id}
@@ -669,11 +720,19 @@ export default function MyOrdersPage() {
                 >
                   <div className="flex items-start justify-between gap-4">
                     <div className="min-w-0 flex-1">
-                      <div className="flex flex-wrap items-center gap-2">
-                        <div className="font-semibold truncate">คำสั่งซื้อ #{o.order_id}</div>
-                        <OrderBadge status={o.status} />
-                        <PaymentBadge method={o.payment_method} status={o.payment_status} />
-                      </div>
+                     <div className="flex flex-wrap items-center gap-2">
+  <div className="font-semibold truncate">คำสั่งซื้อ #{o.order_id}</div>
+  <OrderBadge status={o.status} />
+  <PaymentBadge method={o.payment_method} status={o.payment_status} />
+  
+  {/* 🚚 ป้ายวิธีจัดส่ง (ต่อท้ายป้ายชำระเงิน) */}
+  {shipLabel && (
+    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full border bg-neutral-50 text-neutral-800 text-xs">
+      <FiTruck className="text-neutral-600" />
+      {shipLabel}
+    </span>
+  )}
+</div>
 
                       <div className="text-xs text-neutral-500 mt-0.5">
                         {new Date(o.order_date).toLocaleString("th-TH")} • {o.total_items} ชิ้น
@@ -731,6 +790,7 @@ export default function MyOrdersPage() {
       </div>
       <div className="min-w-0 flex-1">
         <div className="text-xs text-neutral-500">ที่อยู่จัดส่ง</div>
+        
         <StopBubble>
           <div className="text-sm font-medium text-neutral-900 whitespace-pre-line"
                style={{ wordBreak: 'break-word', overflowWrap: 'anywhere' }}>

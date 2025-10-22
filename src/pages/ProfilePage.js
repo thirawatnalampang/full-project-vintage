@@ -23,7 +23,11 @@ function parseThaiAddressParts(addr = '') {
 
 export default function ProfilePage() {
   const { user, setUser } = useAuth();
-
+const [pendingFile, setPendingFile] = useState(null);   // ⬅️ ไฟล์ที่เลือก แต่ยังไม่อัป
+const [previewUrl, setPreviewUrl] = useState('');       // ⬅️ blob:// สำหรับพรีวิว
+useEffect(() => {
+  return () => { if (previewUrl) URL.revokeObjectURL(previewUrl); };
+}, [previewUrl]);
   // -------- ฟอร์มหลัก --------
   const [form, setForm] = useState({
     email: '',
@@ -135,94 +139,80 @@ export default function ProfilePage() {
 
     setForm((prev) => ({ ...prev, [name]: value }));
   };
+const handleFileChange = (e) => {
+  const file = e.target.files?.[0];
+  if (!file) return;
 
-  const handleFileChange = async (e) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    const formData = new FormData();
-    formData.append('image', file);
+  const allowed = ['image/jpeg','image/png','image/webp','image/jpg'];
+  if (!allowed.includes(file.type)) { alert('รองรับ .jpg .png .webp'); e.target.value=''; return; }
+  if (file.size > 3 * 1024 * 1024)  { alert('ขนาดรูปควร < 3MB'); e.target.value=''; return; }
 
-    try {
+  if (previewUrl) URL.revokeObjectURL(previewUrl); // clear รูปเก่า
+  setPreviewUrl(URL.createObjectURL(file));        // ✅ พรีวิวอย่างเดียว
+  setPendingFile(file);                            // ✅ เก็บไฟล์ไว้ รอ "บันทึกข้อมูล"
+};
+const handleSubmit = async (e) => {
+  e.preventDefault();
+  if (form.password !== form.passwordConfirm) {
+    alert('รหัสผ่านใหม่กับยืนยันรหัสผ่านไม่ตรงกัน'); return;
+  }
+  try {
+    const { passwordConfirm, ...rest } = form;
+    if (!rest.email) { alert('ไม่พบอีเมลผู้ใช้'); return; }
+    const payload = { ...rest, zipcode };
+
+    // ✅ อัปโหลดจริงตรงนี้ ถ้ามีไฟล์ค้างอยู่
+    if (pendingFile) {
+      const fd = new FormData();
+      fd.append('image', pendingFile);
       setUploading(true);
-      const res = await fetch(`${SERVER_URL}/api/profile/upload`, {
-        method: 'POST',
-        body: formData,
-      });
-      if (!res.ok) throw new Error('อัปโหลดรูปไม่สำเร็จ');
-      const data = await res.json();
-      setForm((prev) => ({ ...prev, profile_image: data.url }));
-      alert('อัปโหลดรูปสำเร็จ');
-    } catch (err) {
-      alert(err.message);
-      setForm((prev) => ({ ...prev, profile_image: '' }));
-    } finally {
-      setUploading(false);
-    }
-  };
-
-  const handleSubmit = async (e) => {
-    e.preventDefault();
-    if (form.password !== form.passwordConfirm) {
-      alert('รหัสผ่านใหม่กับยืนยันรหัสผ่านไม่ตรงกัน');
-      return;
+      const upRes = await fetch(`${SERVER_URL}/api/profile/upload`, { method: 'POST', body: fd });
+      if (!upRes.ok) throw new Error('อัปโหลดรูปไม่สำเร็จ');
+      const upData = await upRes.json();
+      payload.profile_image = upData.url; // ใส่ url ที่อัปเสร็จเข้า payload
     }
 
-    try {
-      const { passwordConfirm, ...rest } = form;
-      if (!rest.email) {
-        alert('ไม่พบอีเมลผู้ใช้');
-        return;
-      }
-      const payload = { ...rest, zipcode };
+    const res = await fetch(`${SERVER_URL}/api/profile`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
 
-      const res = await fetch(`${SERVER_URL}/api/profile`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload),
-      });
-
-      if (!res.ok) {
-        let errorMsg = 'บันทึกข้อมูลไม่สำเร็จ';
-        try {
-          const errorData = await res.json();
-          if (errorData.message) errorMsg = errorData.message;
-        } catch {
-          const errorText = await res.text();
-          if (errorText) errorMsg = errorText;
-        }
-        throw new Error(errorMsg);
-      }
-
-      const updatedUser = await res.json();
-
-      setForm((prev) => ({
-        ...prev,
-        username: updatedUser.username ?? prev.username,
-        address: updatedUser.address ?? prev.address,
-        phone: updatedUser.phone ?? prev.phone,
-        profile_image: updatedUser.profile_image ?? prev.profile_image,
-        province: updatedUser.province ?? prev.province,
-        district: updatedUser.district ?? prev.district,
-        subdistrict: updatedUser.subdistrict ?? prev.subdistrict,
-        password: '',
-        passwordConfirm: '',
-      }));
-
-      setUser((prev) => ({
-        ...prev,
-        ...updatedUser,
-        role: updatedUser.role ?? prev?.role,
-        isAdmin: updatedUser.isAdmin ?? prev?.isAdmin,
-        email: updatedUser.email ?? prev?.email,
-        profile_image: updatedUser.profile_image ?? prev?.profile_image,
-      }));
-
-      alert('บันทึกข้อมูลสำเร็จ');
-    } catch (err) {
-      alert(err.message);
+    if (!res.ok) {
+      let msg = 'บันทึกข้อมูลไม่สำเร็จ';
+      try { const j = await res.json(); if (j.message) msg = j.message; } 
+      catch { const t = await res.text(); if (t) msg = t; }
+      throw new Error(msg);
     }
-  };
 
+    const updatedUser = await res.json();
+
+    // เคลียร์สถานะไฟล์/พรีวิวหลังบันทึกสำเร็จ
+    if (previewUrl) URL.revokeObjectURL(previewUrl);
+    setPreviewUrl('');
+    setPendingFile(null);
+
+    // sync form + auth
+    setForm(prev => ({
+      ...prev,
+      username: updatedUser.username ?? prev.username,
+      address: updatedUser.address ?? prev.address,
+      phone: updatedUser.phone ?? prev.phone,
+      profile_image: updatedUser.profile_image ?? prev.profile_image,
+      province: updatedUser.province ?? prev.province,
+      district: updatedUser.district ?? prev.district,
+      subdistrict: updatedUser.subdistrict ?? prev.subdistrict,
+      password: '',
+      passwordConfirm: '',
+    }));
+    setUser(prev => ({ ...prev, ...updatedUser, profile_image: updatedUser.profile_image ?? prev?.profile_image }));
+    alert('บันทึกข้อมูลสำเร็จ');
+  } catch (err) {
+    alert(err.message);
+  } finally {
+    setUploading(false);
+  }
+};
   // -------- UI --------
   return (
     <div className="container mx-auto px-4 py-6">
@@ -236,10 +226,17 @@ export default function ProfilePage() {
             <div className="relative">
               {form.profile_image ? (
                 <img
-                  src={form.profile_image.startsWith('http') ? form.profile_image : SERVER_URL + form.profile_image}
-                  alt="Profile"
-                  className="w-24 h-24 sm:w-28 sm:h-28 md:w-32 md:h-32 rounded-full object-cover ring-1 ring-neutral-200 shadow"
-                />
+  src={
+    previewUrl
+      ? previewUrl
+      : (form.profile_image?.startsWith('http')
+          ? form.profile_image
+          : (form.profile_image ? SERVER_URL + form.profile_image : '')
+        )
+  }
+  alt="Profile"
+  className="w-24 h-24 sm:w-28 sm:h-28 md:w-32 md:h-32 rounded-full object-cover ring-1 ring-neutral-200 shadow"
+/>
               ) : (
                 <FaUserCircle className="w-24 h-24 sm:w-28 sm:h-28 md:w-32 md:h-32 text-neutral-300" />
               )}

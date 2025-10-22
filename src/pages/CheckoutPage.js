@@ -58,6 +58,7 @@ export default function CheckoutPage() {
   // ฟอร์มสลิป
   const [slipFile, setSlipFile] = useState(null);
   const [slipAmount, setSlipAmount] = useState('');
+  
 
   // ===== โหลดไทยแอดเดรส + options + postcode อัตโนมัติ =====
   const [addrData, setAddrData] = useState([]);
@@ -495,7 +496,7 @@ export default function CheckoutPage() {
                   onChange={() => setShippingMethod('standard')}
                 />
                 <span>
-                  Standard (฿{SHIPPING_FEE_STANDARD}) —{' '}
+                  จัดส่งธรรมดา (Standard) (฿{SHIPPING_FEE_STANDARD}) —{' '}
                   <span className="text-neutral-500">ฟรีเมื่อยอดถึง {formatTHB(SHIPPING_THRESHOLD)}</span>
                 </span>
               </label>
@@ -507,7 +508,7 @@ export default function CheckoutPage() {
                   checked={shippingMethod === 'express'}
                   onChange={() => setShippingMethod('express')}
                 />
-                <span>Express (฿{SHIPPING_FEE_EXPRESS})</span>
+                <span>จัดส่งด่วน (Express) (฿{SHIPPING_FEE_EXPRESS})</span>
               </label>
             </div>
           </section>

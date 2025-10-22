@@ -14,6 +14,16 @@ import {
   BarChart, Bar, PieChart, Pie, Cell, Legend,Label
 } from "recharts";
 
+// ชื่อวิธีจัดส่งเป็นไทย
+const SHIP_METHOD_TH = {
+  standard: "จัดส่งธรรมดา (Standard)",
+  express: "จัดส่งด่วน (Express)",
+};
+const shipLabelOf = (m) => {
+  const k = String(m || "").toLowerCase();
+  if (k.includes("express") || k === "exp") return "จัดส่งด่วน (Express)";
+  return SHIP_METHOD_TH[k] || (m ? m : "—");
+};
 
 // --- auth helpers ---
 const getToken = () => localStorage.getItem("token") || "";
@@ -787,7 +797,6 @@ formData.append(
 const STATUS_LABELS = {
   pending: "รอดำเนินการ",
   ready_to_ship: "รอจัดส่ง",
-  paid: "ชำระเงินแล้ว",
   shipped: "จัดส่งแล้ว",
   done: "สำเร็จ",
   cancelled: "ยกเลิก",
@@ -1008,7 +1017,6 @@ const pageItems = useMemo(() => {
 const STATUS_LABELS = {
   pending: "รอดำเนินการ",
   ready_to_ship: "รอจัดส่ง",
-  paid: "ชำระเงินแล้ว",
   shipped: "จัดส่งแล้ว",
   done: "สำเร็จ",
   cancelled: "ยกเลิก",
@@ -1700,7 +1708,9 @@ async function saveStatus() {
 
               <div className="bg-neutral-900 border border-neutral-800 rounded-xl p-4">
                 <div className="text-neutral-400 text-sm mb-1">การจัดส่ง/ชำระเงิน</div>
-                <div className="text-neutral-300 text-sm">จัดส่ง: {detail.order.shipping_method || "-"}</div>
+                <div className="text-neutral-300 text-sm">
+  จัดส่ง: {shipLabelOf(detail.order.shipping_method)}
+</div>
                 <div className="text-neutral-300 text-sm">
                   ชำระเงิน: {detail.order.payment_method
   ? (PAYMENT_METHOD_TH[detail.order.payment_method] || detail.order.payment_method)
@@ -1809,7 +1819,7 @@ async function saveStatus() {
                           </div>
                         </td>
                         <td className="px-3 py-2 text-right text-neutral-300">
-                          {CURRENCY(it.unit_price ?? it.price_per_unit ?? 0)}
+                          {CURRENCY(it.unit_price ??  0)}
                         </td>
                         <td className="px-3 py-2 text-right text-neutral-300">{it.quantity ?? 0}</td>
                         <td className="px-3 py-2 text-right text-white">{CURRENCY(it.line_total ?? 0)}</td>
@@ -1884,8 +1894,21 @@ function makeUrl(u) {
   if (u.startsWith("uploads/")) return `${SERVER_ORIGIN}/${u}`; // "uploads/xxx.jpg"
   return `${SERVER_ORIGIN}/uploads/${u}`;               // "xxx.jpg"
 }
+// รวมยอดให้ครอบคลุมหลายชื่อฟิลด์
+const num = (v) => (Number.isFinite(Number(v)) ? Number(v) : 0);
 
-// ปรับ recent-orders ให้พร้อมใช้ (ฝั่งหน้าเว็บ)
+function totalFromOrderRaw(o = {}) {
+  // ถ้า backend ส่ง total มาอยู่แล้ว ก็ใช้เลย
+  const total = num(
+    o.order_total ?? o.total_price ?? o.total ?? o.grand_total
+  );
+  if (total > 0) return total;
+
+  // ถ้าไม่มี ให้รวมเองจาก subtotal + shipping (รองรับหลายชื่อ)
+  const subtotal = num(o.subtotal ?? o.items_total ?? o.products_total);
+  const shipping = num(o.shipping ?? o.shipping_fee ?? o.delivery_fee ?? 0);
+  return subtotal + shipping;
+}
 function normalizeOrders(arr) {
   return (Array.isArray(arr) ? arr : []).map(o => ({
     order_id: o.order_id,
@@ -1895,10 +1918,15 @@ function normalizeOrders(arr) {
     buyer_name: o.buyer_name || "ลูกค้า",
     email: o.email || "",
     phone: o.phone || "",
-    order_total: Number(o.order_total || 0),
+
+    // ✅ ตรงนี้คือประเด็น
+    subtotal: num(o.subtotal ?? o.items_total ?? o.products_total ?? 0),
+    shipping: num(o.shipping ?? o.shipping_fee ?? o.delivery_fee ?? 0),
+    order_total: totalFromOrderRaw(o),
+
     items: Array.isArray(o.items)
       ? o.items.map(it => {
-          const raw = it.image || it.product_image || null; // รองรับหลายชื่อจาก API
+          const raw = it.image || it.product_image || null;
           return {
             product_id: it.product_id,
             product_name: it.product_name,
@@ -1968,6 +1996,43 @@ function DashboardPanel() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const isMobile = useIsMobile(640);
+  // ===== NEW: โหมดกราฟยอดขาย =====
+const [saleMode, setSaleMode] = useState("7d"); // '7d' | '30d' | 'month'
+const [monthStr, setMonthStr] = useState(() => {
+  const d = new Date();
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  return `${y}-${m}`; // 'YYYY-MM' สำหรับ <input type="month">
+});
+const [year, setYear] = useState(new Date().getFullYear());
+const [salesByMonth, setSalesByMonth] = useState([]);
+useEffect(() => {
+  (async () => {
+    try {
+      const res = await authFetch(`${API.metrics}/sales-by-month?year=${year}`);
+      const data = await res.json();
+      if (!res.ok) throw new Error(data?.message || "โหลดยอดขายรายเดือนไม่สำเร็จ");
+      // ปรับรูปข้อมูลสำหรับ recharts
+      setSalesByMonth((Array.isArray(data) ? data : []).map(r => ({
+        ym: r.ym,                 // 'YYYY-MM'
+        month: r.month,           // 1..12
+        revenue: Number(r.revenue || 0),
+        orders: Number(r.orders || 0),
+        customers: Number(r.customers || 0),
+        label: new Date(`${r.ym}-01`).toLocaleDateString("th-TH", { month: "short" }), // ม.ค., ก.พ., ...
+      })));
+    } catch (e) {
+      console.error(e);
+      setSalesByMonth([]);
+    }
+  })();
+}, [year]);
+
+// tick formatter สำหรับแกน X
+const fmtDayTick = (d) => {
+  try { return new Date(d).toLocaleDateString("th-TH", { month: "short", day: "numeric" }); }
+  catch { return d; }
+};
 
   // ===== helpers: image thumbs (ใน component ได้) =====
   const PLACEHOLDER = "https://placehold.co/64x64?text=IMG";
@@ -1999,6 +2064,7 @@ function DashboardPanel() {
     try { return new Date(d).toLocaleDateString("th-TH", { month: "short", day: "numeric" }); }
     catch { return d; }
   };
+  
   const fmtTimeAgo = (date) => {
     try {
       const d = new Date(date);
@@ -2041,75 +2107,110 @@ function DashboardPanel() {
     }));
 
   // ===== Fetch =====
-  useEffect(() => {
-    const query = new URLSearchParams({
-      from: `${new Date().getFullYear()}-01-01`,
-      to: "2999-12-31",
-      limit: "5",
-    }).toString();
+ // ===== ดึง metrics หลัก (คงของเดิมไว้ได้) =====
+useEffect(() => {
+  const query = new URLSearchParams({
+    from: `${new Date().getFullYear()}-01-01`,
+    to: "2029-12-31",
+    limit: "5",
+  }).toString();
 
-    (async () => {
-      try {
-        setLoading(true);
-        setError("");
+  (async () => {
+    try {
+      setLoading(true);
+      setError("");
 
-        const [oRes, dRes, tRes, cRes, roRes] = await Promise.all([
-          authFetch(`${API.metrics}/overview?${query}`),
-          authFetch(`${API.metrics}/sales-by-day?${query}`),
-          authFetch(`${API.metrics}/top-products?${query}`),
-          authFetch(`${API.metrics}/category-breakdown?${query}`),
-          authFetch(`${API.metrics}/recent-orders?limit=15`)
-        ]);
+      const [oRes, tRes, cRes, roRes] = await Promise.all([
+        authFetch(`${API.metrics}/overview?${query}`),
+        authFetch(`${API.metrics}/top-products?${query}`),
+        authFetch(`${API.metrics}/category-breakdown?${query}`),
+        authFetch(`${API.metrics}/recent-orders?limit=15`)
+      ]);
 
-        const [o, d, t, c, ro] = await Promise.all([
-          oRes.json(), dRes.json(), tRes.json(), cRes.json(),
-          roRes.ok ? roRes.json() : Promise.resolve([]),
-        ]);
+      const [o, t, c, ro] = await Promise.all([
+        oRes.json(), tRes.json(), cRes.json(),
+        roRes.ok ? roRes.json() : Promise.resolve([]),
+      ]);
 
-        if (!oRes.ok || !dRes.ok || !tRes.ok || !cRes.ok) {
-          throw new Error(`metrics error: ${oRes.status}/${dRes.status}/${tRes.status}/${cRes.status}`);
-        }
-
-        setOverview({
-          total_revenue: Number(o?.total_revenue ?? o?.total ?? 0),
-          orders_count: Number(o?.orders_count ?? o?.orders ?? 0),
-          customers: Number(o?.customers ?? o?.unique_customers ?? 0),
-        });
-        setSalesByDay(normalizeSales(d));
-        setTopProducts(normalizeTop(t));
-        setByCategory(normalizeCat(c));
-        setRecentOrders(normalizeOrders(ro)); // ← ใช้ helper นอก component
-      } catch (err) {
-        console.error("metrics fetch error:", err);
-        setError(err?.message || "โหลดข้อมูลล้มเหลว");
-        setOverview({ total_revenue: 0, orders_count: 0, customers: 0 });
-        setSalesByDay([]);
-        setTopProducts([]);
-        setByCategory([]);
-        setRecentOrders([]);
-      } finally {
-        setLoading(false);
+      if (!oRes.ok || !tRes.ok || !cRes.ok) {
+        throw new Error(`metrics error: ${oRes.status}/${tRes.status}/${cRes.status}`);
       }
-    })();
-  }, []); // ✅ ไม่มี warning อีก เพราะ normalizeOrders อยู่ "นอก" component
-const renderPieLabelMobile = ({ cx, cy, midAngle, outerRadius, percent }) => {
+
+      setOverview({
+        total_revenue: Number(o?.total_revenue ?? o?.total ?? 0),
+        orders_count: Number(o?.orders_count ?? o?.orders ?? 0),
+        customers: Number(o?.customers ?? o?.unique_customers ?? 0),
+      });
+      setTopProducts(normalizeTop(t));
+      setByCategory(normalizeCat(c));
+      setRecentOrders(normalizeOrders(ro));
+    } catch (err) {
+      console.error("metrics fetch error:", err);
+      setError(err?.message || "โหลดข้อมูลล้มเหลว");
+      setOverview({ total_revenue: 0, orders_count: 0, customers: 0 });
+      setTopProducts([]);
+      setByCategory([]);
+      setRecentOrders([]);
+    } finally {
+      setLoading(false);
+    }
+  })();
+}, []);
+// ===== ดึง series ยอดขาย ตามโหมด (7d / 30d / month) =====
+useEffect(() => {
+  (async () => {
+    try {
+      const params = new URLSearchParams();
+      if (saleMode === "month") {
+        params.set("group", "month");
+        params.set("ym", monthStr); // 'YYYY-MM'
+      } else {
+        // 7d หรือ 30d
+        params.set("group", "day");
+        params.set("range", saleMode); // '7d' | '30d'
+      }
+
+      const res = await authFetch(`${API.metrics}/sales-series?${params.toString()}`);
+      const data = await res.json();
+      if (!res.ok) throw new Error(data?.message || "โหลดกราฟยอดขายไม่สำเร็จ");
+
+      // ใช้ normalizer เดิมได้
+      setSalesByDay(normalizeSales(data));
+    } catch (e) {
+      console.error(e);
+      setSalesByDay([]);
+    }
+  })();
+}, [saleMode, monthStr]);
+
+  // ช่วยย่อชื่อให้พอดีจอ
+const shortName = (s, max = 8) => {
+  const t = String(s || "");
+  return t.length > max ? t.slice(0, max) + "…" : t;
+};
+
+// แสดงชื่อ + % (อยู่นอกวงเล็กน้อย)
+const renderPieLabelMobile = ({ cx, cy, midAngle, innerRadius, outerRadius, percent, name }) => {
   const RAD = Math.PI / 180;
-  const r = outerRadius + 6; // ใกล้วง เพื่อลดโอกาสตัดขอบ
+  const r = outerRadius + 8;              // ดันออกมานอกวงนิดหน่อย
   const x = cx + r * Math.cos(-midAngle * RAD);
   const y = cy + r * Math.sin(-midAngle * RAD);
+  const isRight = x > cx;
+
   return (
     <text
       x={x}
       y={y}
-      textAnchor={x > cx ? "start" : "end"}
+      textAnchor={isRight ? "start" : "end"}
       dominantBaseline="central"
-      style={{ fontSize: 10, fontWeight: 700, fill: CHART.text }}
+      style={{ fill: CHART.text, pointerEvents: "none" }}
     >
-      {(percent * 100).toFixed(0)}%
+      <tspan style={{ fontSize: 10, fontWeight: 600 }}>{shortName(name)}</tspan>
+      <tspan> </tspan>
+      <tspan style={{ fontSize: 10, fontWeight: 800 }}>{(percent * 100).toFixed(0)}%</tspan>
     </text>
   );
 };
-
 
 
   // ===== Reusable UI =====
@@ -2127,6 +2228,7 @@ const renderPieLabelMobile = ({ cx, cy, midAngle, outerRadius, percent }) => {
       </div>
     </Card>
   );
+  
   const Skeleton = ({ h = 180 }) => (
     <div className="relative overflow-hidden rounded-2xl border border-neutral-800 bg-neutral-900">
       <div className="h-9 border-b border-neutral-800 px-4 flex items-center font-semibold text-white/0">.</div>
@@ -2163,7 +2265,7 @@ const renderPieLabelMobile = ({ cx, cy, midAngle, outerRadius, percent }) => {
       {/* KPI cards */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
         <KPI title="ยอดขายรวม" value={fmtTHB(overview.total_revenue)} icon={<FaChartLine />} />
-        <KPI title="จำนวนออเดอร์" value={fmtCompact(overview.orders_count)} icon={<FaShoppingBag />} />
+        <KPI title="จำนวนออเดอร์ที่สำเร็จ" value={fmtCompact(overview.orders_count)} icon={<FaShoppingBag />} />
         <KPI title="ลูกค้าที่สั่งซื้อ" value={fmtCompact(overview.customers)} icon={<FaUsers />} />
       </div>
 
@@ -2177,22 +2279,146 @@ const renderPieLabelMobile = ({ cx, cy, midAngle, outerRadius, percent }) => {
       {loading ? (
         <Skeleton h={280} />
       ) : (
-        <Card>
-          <div className="mb-2 font-semibold text-white">ยอดขายรายวัน</div>
-          <div className="relative" style={{ height: 280 }}>
-            {salesByDay.length === 0 && <NoData />}
-            <ResponsiveContainer width="100%" height="100%">
-              <LineChart data={salesByDay} margin={{ top: 10, right: 20, left: 0, bottom: 0 }}>
-                <CartesianGrid {...gridStyle} />
-                <XAxis dataKey="day" tickFormatter={fmtDate} tick={axisTick} />
-                <YAxis tickFormatter={(v) => fmtCompact(v)} tick={axisTick} />
-                <Tooltip content={<LineTT />} />
-                <Line type="monotone" dataKey="revenue" stroke={CHART.line} strokeWidth={3} dot={false} activeDot={{ r: 5 }} />
-              </LineChart>
-            </ResponsiveContainer>
-          </div>
-        </Card>
+    <Card>
+  <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+    {/* ซ้าย: ชื่อการ์ด (ตัดคำได้) */}
+    <div className="font-semibold text-white min-w-0 max-w-full">
+      <span className="block truncate">
+        {saleMode === "month"
+          ? `ยอดขายรายวัน • เดือน ${new Date(monthStr + "-01").toLocaleDateString("th-TH", { year: "numeric", month: "long" })}`
+          : saleMode === "30d"
+            ? "ยอดขาย 30 วันล่าสุด"
+            : "ยอดขาย 7 วันล่าสุด"}
+      </span>
+    </div>
+
+    {/* ขวา: ปุ่มโหมด + month picker → เลื่อนแนวนอนบนมือถือ */}
+    <div
+      className="
+        -mx-2 px-2        /* กันชิดขอบ + เผื่อเงาโค้ง */
+        flex items-center gap-2
+        overflow-x-auto   /* เลื่อนแนวนอนเมื่อแคบ */
+        max-w-full
+      "
+    >
+      <button
+        onClick={() => setSaleMode("7d")}
+        className={`px-3 py-1.5 rounded-lg border whitespace-nowrap ${
+          saleMode === "7d" ? "bg-white text-black border-white" : "bg-neutral-900 text-neutral-200 border-neutral-700"
+        }`}
+      >
+        7 วัน
+      </button>
+      <button
+        onClick={() => setSaleMode("30d")}
+        className={`px-3 py-1.5 rounded-lg border whitespace-nowrap ${
+          saleMode === "30d" ? "bg-white text-black border-white" : "bg-neutral-900 text-neutral-200 border-neutral-700"
+        }`}
+      >
+        30 วัน
+      </button>
+      <button
+        onClick={() => setSaleMode("month")}
+        className={`px-3 py-1.5 rounded-lg border whitespace-nowrap ${
+          saleMode === "month" ? "bg-white text-black border-white" : "bg-neutral-900 text-neutral-200 border-neutral-700"
+        }`}
+      >
+        รายเดือน
+      </button>
+
+      {saleMode === "month" && (
+        <input
+          type="month"
+          value={monthStr}
+          onChange={(e) => setMonthStr(e.target.value)}
+          className="
+            px-3 py-1.5 rounded-lg bg-neutral-900 text-white border border-neutral-700
+            w-[150px] sm:w-[180px] shrink-0
+          "
+        />
       )}
+    </div>
+  </div>
+
+
+  <div className="relative" style={{ height: 280 }}>
+    {salesByDay.length === 0 && <NoData />}
+    <ResponsiveContainer width="100%" height="100%">
+      <LineChart data={salesByDay} margin={{ top: 10, right: 20, left: 0, bottom: 0 }}>
+        <CartesianGrid {...gridStyle} />
+        <XAxis
+          dataKey="day"
+          tickFormatter={fmtDayTick}
+          tick={axisTick}
+        />
+        <YAxis tickFormatter={(v) => fmtCompact(v)} tick={axisTick} />
+        <Tooltip content={<LineTT />} />
+        <Line type="monotone" dataKey="revenue" stroke={CHART.line} strokeWidth={3} dot={false} activeDot={{ r: 5 }} />
+      </LineChart>
+    </ResponsiveContainer>
+  </div>
+</Card>
+
+      )}
+
+<Card>
+  <div className="mb-2 flex items-center justify-between">
+    <div className="font-semibold text-white">
+      ยอดขายรายเดือน • ปี {year}
+    </div>
+    <select
+      value={year}
+      onChange={(e) => setYear(Number(e.target.value))}
+      className="bg-neutral-900 border border-neutral-700 rounded-lg px-3 py-1.5 text-white"
+    >
+      {/* ใส่ช่วงปีที่ต้องการให้เลือก */}
+      {Array.from({ length: 6 }, (_, i) => new Date().getFullYear() - i).map(y => (
+        <option key={y} value={y}>{y}</option>
+      ))}
+    </select>
+  </div>
+
+  <div className="relative" style={{ height: 280 }}>
+    {salesByMonth.length === 0 && <NoData />}
+    <ResponsiveContainer width="100%" height="100%">
+      <BarChart
+  data={salesByMonth}
+  margin={{ top: 40, right: 20, left: -10, bottom: 30 }} // 👈 เพิ่ม top
+>
+        <CartesianGrid {...gridStyle} />
+        <XAxis dataKey="label" tick={axisTick} />
+        <YAxis tickFormatter={(v) => fmtCompact(v)} tick={axisTick} />
+        <Tooltip
+          content={({ active, payload, label }) =>
+            active && payload?.length ? (
+              <div className="rounded-lg border border-neutral-700 bg-neutral-900 px-3 py-2 text-sm text-white">
+                <div className="font-medium">เดือน {label} {year}</div>
+                <div className="text-neutral-300">ยอดขาย {fmtTHB(payload[0].value)}</div>
+              </div>
+            ) : null
+          }
+        />
+       <Bar
+  dataKey="revenue"
+  fill={CHART.bar}
+  radius={[8, 8, 0, 0]}
+  label={({ x, y, width, value }) => (
+    <text
+      x={x + width / 2}
+      y={y - 6} // 👈 ลดค่าลบลง (เช่น -10 → -6)
+      fill="#fff"
+      fontSize={12}
+      textAnchor="middle"
+    >
+      {new Intl.NumberFormat('th-TH').format(value)}
+    </text>
+  )}
+/>
+
+      </BarChart>
+    </ResponsiveContainer>
+  </div>
+</Card>
 
       {/* Top products + Category breakdown */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
@@ -2243,43 +2469,46 @@ const renderPieLabelMobile = ({ cx, cy, midAngle, outerRadius, percent }) => {
   </ul>
 </Card>
 
+
 <Card>
   <div className="mb-2 font-semibold text-white">ยอดขายตามหมวดหมู่</div>
   <div className="relative" style={{ height: 340 }}>
     {byCategory.length === 0 && <NoData />}
-
-   <ResponsiveContainer width="100%" height="100%">
-  <PieChart>
-    <Pie
-  data={byCategory}
-  dataKey="revenue"
-  nameKey="category"
-  cx="50%"
-  cy="50%"
-  innerRadius={isMobile ? "40%" : "52%"}
-  outerRadius={isMobile ? "65%" : "78%"}
-  labelLine={isMobile ? { length: 6 } : { length: 10 }}
-  label={isMobile ? renderPieLabelMobile : renderPieLabel}
+<ResponsiveContainer
+  width="100%"
+  height="100%"
+  className="overflow-visible"
+  style={{ overflow: "visible" }}     // ✅ กัน label โดนตัด
 >
-  {byCategory.map((_, i) => (
-    <Cell key={i} fill={CHART.pie[i % CHART.pie.length]} />
-  ))}
+  <PieChart margin={{ top: 10, right: 12, bottom: isMobile ? 32 : 40, left: 12 }}>
+    <Pie
+      data={byCategory}
+      dataKey="revenue"
+      nameKey="category"
+      cx="50%"
+      cy="50%"
+      innerRadius={isMobile ? "40%" : "52%"}
+      outerRadius={isMobile ? "60%" : "78%"}           // ✅ ลดรัศมีบนมือถือให้มีที่วาง label
+      labelLine={isMobile ? { length: 6 } : { length: 10 }}
+      label={isMobile ? renderPieLabelMobile : renderPieLabel}  // ✅ มือถือ: ชื่อ + %
+    >
+      {byCategory.map((_, i) => (
+        <Cell key={i} fill={CHART.pie[i % CHART.pie.length]} />
+      ))}
 
-  {/* ✅ Center label */}
-  <Label
-    value={`รวม ${fmtTHB(totalCatRevenue)}`}
-    position="center"
-    style={{ fill: CHART.text, fontSize: 14, fontWeight: "bold" }}
-  />
-</Pie>
-
+      <Label
+        value={`รวม ${fmtTHB(totalCatRevenue)}`}
+        position="center"
+        style={{ fill: CHART.text, fontSize: 14, fontWeight: "bold" }}
+      />
+    </Pie>
 
     <Tooltip content={<PieTT />} />
     <Legend
       layout="horizontal"
       verticalAlign="bottom"
       align="center"
-      wrapperStyle={{ color: CHART.text, marginTop: isMobile ? 28 : 40 }}
+      wrapperStyle={{ color: CHART.text, marginTop: isMobile ? 16 : 40 }}
     />
   </PieChart>
 </ResponsiveContainer>
@@ -2295,6 +2524,7 @@ const renderPieLabelMobile = ({ cx, cy, midAngle, outerRadius, percent }) => {
       </div>
 
  {/* ✅ Recent orders – 10 ออเดอร์ล่าสุด */}
+{/* ✅ Recent orders – 10 ออเดอร์ล่าสุด */}
 <Card>
   <div className="mb-2 font-semibold text-white">ออเดอร์ที่สำเร็จล่าสุด</div>
   <div className="relative">
@@ -2303,76 +2533,70 @@ const renderPieLabelMobile = ({ cx, cy, midAngle, outerRadius, percent }) => {
     ) : recentOrders.length === 0 ? (
       <NoData>ยังไม่มีออเดอร์</NoData>
     ) : (
-<ul className="divide-y divide-neutral-800">
-  {recentOrders.map((o) => {
-    const items   = Array.isArray(o.items) ? o.items : [];
-    const show    = items.slice(0, 3);                       // โชว์ได้สูงสุด 3 ชิ้น
-    const more    = Math.max(items.length - show.length, 0);
-    const imgSrc = (it) => it.image_url || it.image || PLACEHOLDER;
+      <ul className="divide-y divide-neutral-800">
+        {recentOrders.map((o) => {
+          const items   = Array.isArray(o.items) ? o.items : [];
+          const show    = items.slice(0, 3); // โชว์ได้สูงสุด 3 ชิ้น
+          const more    = Math.max(items.length - show.length, 0);
+          const imgSrc = (it) => it.image_url || it.image || PLACEHOLDER;
 
-    return (
-     <li
-  key={o.order_id}
-  className="
-    group py-3 px-2 -mx-2 rounded-xl transition-colors
-    hover:bg-neutral-800/40
-    flex sm:flex items-start gap-3
-    sm:gap-3
-    flex-col sm:flex-row          /* ✅ มือถือเรียงแนวตั้ง */
-  "
->
-  {/* ซ้าย: เลขออเดอร์ + เวลาคร่าวๆ */}
-  <div className="w-full sm:w-24 flex sm:block justify-between sm:justify-start text-xs text-neutral-400">
-    <span>#{o.order_id}</span>
-    <span className="text-[11px] text-neutral-500 sm:block">{fmtTimeAgo(o.order_time)}</span>
-  </div>
+          return (
+            <li
+              key={o.order_id}
+              className="group py-3 px-2 -mx-2 rounded-xl transition-colors
+                hover:bg-neutral-800/40 flex sm:flex items-start gap-3 sm:gap-3 flex-col sm:flex-row"
+            >
+              {/* ซ้าย: เลขออเดอร์ + เวลาคร่าวๆ */}
+              <div className="w-full sm:w-24 flex sm:block justify-between sm:justify-start text-xs text-neutral-400">
+                <span>#{o.order_id}</span>
+                <span className="text-[11px] text-neutral-500 sm:block">{fmtTimeAgo(o.order_time)}</span>
+              </div>
 
-  {/* กลาง: รายการสินค้า */}
-  <div className="flex-1 min-w-0">
-    <div className="text-sm text-white font-medium truncate">
-      {o.buyer_name}
-      <span className="text-neutral-400"> • {o.shipping_method || "ไม่ระบุการจัดส่ง"}</span>
-    </div>
+              {/* กลาง: รายการสินค้า */}
+              <div className="flex-1 min-w-0">
+                <div className="text-sm text-white font-medium truncate">
+                  {o.buyer_name}
+                  <span className="text-neutral-400"> • {shipLabelOf(o.shipping_method) || "ไม่ระบุการจัดส่ง"}</span> {/* ใช้ shipLabelOf ที่นี่ */}
+                </div>
 
-    {show.length > 0 ? (
-      <ul className="mt-1 space-y-1">
-        {show.map((it, idx) => (
-          <li key={idx} className="flex items-center gap-2">
-            <img
-              src={imgSrc(it)}
-              alt={it.product_name || "product"}
-              loading="lazy"
-              className="w-7 h-7 sm:w-8 sm:h-8 rounded object-cover border border-neutral-700"
-              onError={(e) => (e.currentTarget.src = PLACEHOLDER)}
-            />
-            <div className="text-[12px] sm:text-xs text-neutral-300 truncate">
-              {it.product_name}
-              {it.category_name && (
-                <span className="text-neutral-500"> • {it.category_name}</span>
-              )}
-              <span className="text-neutral-500"> • ×{it.quantity}</span>
-            </div>
-          </li>
-        ))}
-        {more > 0 && (
-          <li className="text-[11px] text-neutral-400">+{more} รายการ</li>
-        )}
+                {show.length > 0 ? (
+                  <ul className="mt-1 space-y-1">
+                    {show.map((it, idx) => (
+                      <li key={idx} className="flex items-center gap-2">
+                        <img
+                          src={imgSrc(it)}
+                          alt={it.product_name || "product"}
+                          loading="lazy"
+                          className="w-7 h-7 sm:w-8 sm:h-8 rounded object-cover border border-neutral-700"
+                          onError={(e) => (e.currentTarget.src = PLACEHOLDER)}
+                        />
+                        <div className="text-[12px] sm:text-xs text-neutral-300 truncate">
+                          {it.product_name}
+                          {it.category_name && (
+                            <span className="text-neutral-500"> • {it.category_name}</span>
+                          )}
+                          <span className="text-neutral-500"> • ×{it.quantity}</span>
+                        </div>
+                      </li>
+                    ))}
+                    {more > 0 && (
+                      <li className="text-[11px] text-neutral-400">+{more} รายการ</li>
+                    )}
+                  </ul>
+                ) : (
+                  <div className="text-xs text-neutral-500">ไม่มีสินค้า</div>
+                )}
+              </div>
+
+              {/* ขวา: เวลาแน่นอน + ยอดรวม */}
+              <div className="w-full sm:w-28 sm:text-right flex justify-between sm:block mt-1 sm:mt-0">
+                <div className="text-[11px] text-neutral-400">{fmtDateTime(o.order_time)}</div>
+                <div className="text-sm text-white font-semibold tabular-nums">{fmtTHB(o.order_total)}</div>
+              </div>
+            </li>
+          );
+        })}
       </ul>
-    ) : (
-      <div className="text-xs text-neutral-500">ไม่มีสินค้า</div>
-    )}
-  </div>
-
-  {/* ขวา: เวลาแน่นอน + ยอดรวม */}
-  <div className="w-full sm:w-28 sm:text-right flex justify-between sm:block mt-1 sm:mt-0">
-    <div className="text-[11px] text-neutral-400">{fmtDateTime(o.order_time)}</div>
-    <div className="text-sm text-white font-semibold tabular-nums">{fmtTHB(o.order_total)}</div>
-  </div>
-</li>
-
-    );
-  })}
-</ul>
     )}
   </div>
 </Card>

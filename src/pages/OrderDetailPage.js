@@ -30,6 +30,16 @@ const PAYMENT_TH = {
   paid: "ชำระแล้ว",
   rejected: "สลิปถูกปฏิเสธ",
 };
+const SHIP_METHOD_TH = {
+  standard: "จัดส่งธรรมดา",
+  express: "จัดส่งด่วน",
+};
+const shipLabelOf = (m) => {
+  const k = String(m || "").toLowerCase();
+  if (k.includes("express") || k === "exp") return "จัดส่งด่วน";
+  return SHIP_METHOD_TH[k] || "จัดส่งธรรมดา"; // ไม่รู้จัก = ส่งธรรมดา
+};
+
 // ===== helpers: ฟอร์แมตที่อยู่ไทย (รองรับ กทม.) =====
 function formatThaiAddressParts({
   address_line, address_line2, detail,
@@ -81,14 +91,24 @@ const payPillColor = (p) => ({
 const ORDER_FLOW = ["pending", "ready_to_ship", "shipped", "done"];
 const ORDER_FLOW_LABELS = ["รับคำสั่งซื้อ", "เตรียมจัดส่ง", "จัดส่งแล้ว", "สำเร็จ"];
 
+/* ===== Tracking helpers ===== */
 const trackingUrl = (carrier, code) => {
   if (!code) return null;
   const c = String(carrier || "").toLowerCase();
   const q = encodeURIComponent(code);
-  if (c.includes("kerry")) return `https://th.kerryexpress.com/th/track/?track=${q}`;
-  if (c.includes("thai") || c.includes("ems")) return `https://track.thailandpost.com/?trackNumber=${q}`;
-  if (c.includes("j&t") || c.includes("jnt")) return `https://www.jtexpress.co.th/service/track/${q}`;
-  if (c.includes("flash")) return `https://www.flashexpress.com/fle/tracking?se=${q}`;
+
+  if (c.includes("kerry"))
+    return `https://th.kerryexpress.com/th/track/?track=${q}`;
+  if (c.includes("thai") || c.includes("ems"))
+    return `https://track.thailandpost.co.th/?trackNumber=${q}`;
+  if (c.includes("j&t") || c.includes("jnt"))
+    return `https://www.jtexpress.co.th/index/query/gzquery.html?billcode=${q}`;
+  if (c.includes("flash"))
+    return `https://www.flashexpress.com/fle/tracking?se=${q}`;
+  if (c.includes("best"))
+    return `https://www.best-inc.co.th/track?bills=${q}`;
+  if (c.includes("ninja") || c.includes("ninjavan"))
+    return `https://www.ninjavan.co/th-th/tracking?id=${q}`;
   return `https://www.google.com/search?q=${encodeURIComponent(`${carrier || ""} ${code}`)}`;
 };
 
@@ -439,6 +459,8 @@ export default function OrderDetailPage() {
   if (!o?.order) return null;
 
   const od = o.order;
+  const shipLabel = shipLabelOf(od.shipping_method);
+
   const kShowCarrier = od.carrier || od.tracking_carrier;
   const kShowTrack = od.tracking_code || od.tracking_no || od.tracking;
 
@@ -453,54 +475,89 @@ export default function OrderDetailPage() {
         </div>
       </div>
 
-      <div className="bg-white border rounded-2xl p-5 space-y-4">
-        <div className="flex flex-wrap items-center gap-2">
-          <div className="font-semibold text-lg">คำสั่งซื้อ #{od.order_code || od.id || od.order_id}</div>
-          <span className={cx("px-2 py-0.5 text-xs rounded-full border inline-flex items-center gap-1", statusPillColor(od.status))}>
-            <FiPackage /> {STATUS_TH[od.status] || od.status}
-          </span>
-          {/* เหตุผลการยกเลิก (ถ้ามี) */}
-{od.status === "cancelled" && (
-  <div className="rounded-xl border border-rose-200 bg-rose-50 p-3">
-    <div className="text-sm font-semibold text-rose-800">เหตุผลการยกเลิก</div>
-    <div className="mt-1 text-sm text-rose-900 whitespace-pre-wrap">
-      {od.cancel_reason || "—"}
+<div className="bg-white border rounded-2xl p-5 space-y-4">
+  {/* 🟢 หัวแถว: ไม่ให้ตกบรรทัด + เลื่อนได้ถ้าพื้นที่ไม่พอ */}
+  <div className="flex items-center gap-2 flex-nowrap overflow-x-auto no-scrollbar">
+    {/* 1️⃣ ชื่อออเดอร์ */}
+    <div className="font-semibold text-lg min-w-0 flex-1 truncate">
+      คำสั่งซื้อ #{od.order_code || od.id || od.order_id}
     </div>
-    <div className="mt-1 text-xs text-rose-700/80">
-  โดย: {CANCELLED_BY_TH[od.cancelled_by] || od.cancelled_by || "—"}
-  {od.cancelled_at && (
-    <>
-      {" • เมื่อ "}
-      {new Date(od.cancelled_at).toLocaleDateString("th-TH", {
-        day: "numeric",
-        month: "long",
-        year: "numeric",
-      })}{" "}
-      {new Date(od.cancelled_at).toLocaleTimeString("th-TH", {
-        hour: "2-digit",
-        minute: "2-digit",
-      })}
-    </>
-  )}
-</div>
-  </div>
+
+    {/* 2️⃣ สถานะคำสั่งซื้อ */}
+    <span
+      className={cx(
+        "px-2 py-0.5 text-xs rounded-full border inline-flex items-center gap-1 shrink-0",
+        statusPillColor(od.status)
+      )}
+    >
+      <FiPackage /> {STATUS_TH[od.status] || od.status}
+    </span>
+
+    {/* 3️⃣ เหตุผลการยกเลิก */}
+    {/* 3️⃣ เหตุผลการยกเลิก */}
+{od.status === "cancelled" && (
+  <span
+    className="inline-flex flex-col md:flex-row md:items-center gap-x-2 gap-y-0.5 px-3 py-1 rounded-xl border border-rose-200 bg-rose-50 text-xs text-rose-800 whitespace-nowrap shrink-0 max-w-[280px] overflow-hidden text-ellipsis"
+    title={`เหตุผล: ${od.cancel_reason || "—"}\nโดย: ${
+      CANCELLED_BY_TH[od.cancelled_by] || od.cancelled_by || "—"
+    }${
+      od.cancelled_at
+        ? ` • ${new Date(od.cancelled_at).toLocaleString("th-TH")}`
+        : ""
+    }`}
+  >
+    {/* 🔹 เหตุผล (สั้นๆ) */}
+    <span>
+      เหตุผล:{" "}
+      {(od.cancel_reason || "—").length > 18
+        ? (od.cancel_reason || "—").slice(0, 18) + "…"
+        : od.cancel_reason || "—"}
+    </span>
+    {/* 🔹 แสดงชื่อผู้ยกเลิก */}
+    <span className="text-rose-700/80">
+      โดย: {CANCELLED_BY_TH[od.cancelled_by] || od.cancelled_by || "—"}
+    </span>
+  </span>
 )}
+    {/* 4️⃣ การชำระเงิน */}
+    <span
+      className={cx(
+        "px-2 py-0.5 text-xs rounded-full border inline-flex items-center gap-1 shrink-0",
+        payPillColor(od.payment_status)
+      )}
+    >
+      {od.payment_status === "paid" ? (
+        <FiCheckCircle />
+      ) : od.payment_status === "rejected" ? (
+        <FiX />
+      ) : (
+        <FiClock />
+      )}
+      {(od.payment_method === "cod" ? "ปลายทาง" : "โอน")} •{" "}
+      {PAYMENT_TH[od.payment_status] || "ยังไม่ชำระ"}
+    </span>
 
-          <span className={cx("px-2 py-0.5 text-xs rounded-full border inline-flex items-center gap-1", payPillColor(od.payment_status))}>
-            {od.payment_status === "paid" ? <FiCheckCircle /> : od.payment_status === "rejected" ? <FiX /> : <FiClock />}
-            {(od.payment_method === "cod" ? "ปลายทาง" : "โอน")} • {PAYMENT_TH[od.payment_status] || "ยังไม่ชำระ"}
-          </span>
+    {/* 5️⃣ วิธีจัดส่ง */}
+    {shipLabel && (
+      <span className="px-2 py-0.5 text-xs rounded-full border inline-flex items-center gap-1 bg-neutral-100 text-neutral-700 whitespace-nowrap shrink-0">
+        <FiTruck /> {shipLabel}
+      </span>
+    )}
 
-          {(kShowTrack || kShowCarrier) && (
-            <button
-              type="button"
-              onClick={() => window.open(trackingUrl(kShowCarrier, kShowTrack), "_blank", "noopener")}
-              className="ml-auto inline-flex items-center gap-1 px-2 py-0.5 rounded-full border bg-amber-100 text-amber-700 hover:bg-amber-200 text-xs"
-            >
-              <FiTruck /> {(kShowCarrier || "ติดตาม")} • เลขพัสดุ: <b>{kShowTrack}</b>
-            </button>
-          )}
-        </div>
+    {/* 6️⃣ ปุ่มติดตามพัสดุ */}
+    {(kShowTrack || kShowCarrier) && (
+      <button
+        type="button"
+        onClick={() =>
+          window.open(trackingUrl(kShowCarrier, kShowTrack), "_blank", "noopener")
+        }
+        className="ml-auto inline-flex items-center gap-1 px-2 py-0.5 rounded-full border bg-amber-100 text-amber-700 hover:bg-amber-200 text-xs shrink-0"
+      >
+        <FiTruck /> {(kShowCarrier || "ติดตาม")} • เลขพัสดุ: <b>{kShowTrack}</b>
+      </button>
+    )}
+  </div>
+
 
         {/* ผู้รับ / ที่อยู่ */}
         <div className="rounded-xl border border-dashed bg-neutral-50/60 p-3">
@@ -541,6 +598,8 @@ export default function OrderDetailPage() {
               </div>
               <div className="min-w-0">
                 <div className="text-xs text-neutral-500">ที่อยู่จัดส่ง</div>
+                
+
                 <StopBubble>
                   <div className="text-sm font-medium text-neutral-900 break-words whitespace-pre-line">
                     {ship.addressText || "—"}
@@ -606,10 +665,15 @@ export default function OrderDetailPage() {
                 <div className="text-neutral-600">ยอดสินค้า</div>
                 <div className="font-medium">{formatTHB(sum.sub)}</div>
               </div>
-              <div className="flex items-center justify-between text-sm mt-1">
-                <div className="text-neutral-600">ค่าส่ง</div>
-                <div className="font-medium">{formatTHB(sum.shipping)}</div>
-              </div>
+             <div className="flex items-center justify-between text-sm mt-1">
+  <div className="text-neutral-600">
+    ค่าส่ง • {shipLabel}
+  </div>
+  <div className="font-medium">
+    {sum.shipping > 0 ? formatTHB(sum.shipping) : "ฟรี"}
+  </div>
+</div>
+
               <div className="flex items-center justify-between text-base mt-2 pt-2 border-t">
                 <div className="font-semibold">ยอดรวม</div>
                 <div className="text-emerald-600 font-extrabold">{formatTHB(sum.total)}</div>
