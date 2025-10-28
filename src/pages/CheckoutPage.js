@@ -3,6 +3,8 @@ import React, { useMemo, useState, useEffect } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import { useCart } from '../context/CartContext';
 import { useAuth } from '../context/AuthContext';
+import { useStripe, useElements, CardElement } from '@stripe/react-stripe-js'; // นำเข้า Stripe components
+
 
 const API_BASE = process.env.REACT_APP_API_BASE || 'http://localhost:3000';
 
@@ -32,6 +34,8 @@ export default function CheckoutPage() {
   const navigate = useNavigate();
   const { cart, clearCart } = useCart();
   const { user } = useAuth();
+const stripe = useStripe();
+const elements = useElements();
 
   // ฟอร์มที่อยู่
   const [form, setForm] = useState({
@@ -44,6 +48,63 @@ export default function CheckoutPage() {
     postcode: '',
     note: '',
   });
+// ฟังก์ชัน handlePaymentSubmit ที่ไม่ต้องใช้ event.preventDefault()
+const handlePaymentSubmit = async (orderId) => {
+  if (paymentMethod === 'card') {
+    if (!stripe || !elements) {
+      setErr('กรุณากรอกข้อมูลบัตรเครดิต');
+      return;
+    }
+
+    const card = elements.getElement(CardElement);
+    const { token, error } = await stripe.createToken(card);
+
+    if (error) {
+      setErr(error.message);  // แสดงข้อความ error ถ้ามี
+      return;
+    } else if (!token) {
+      setErr('กรุณากรอกข้อมูลบัตรเครดิตให้ครบ');
+      return;
+    }
+
+    // ส่ง token ไปยังเซิร์ฟเวอร์เพื่อทำการชำระเงิน
+    const res = await fetch(`${API_BASE}/api/payment`, {
+      method: 'POST',
+      body: JSON.stringify({
+        token: token.id,
+        amount: total,
+        orderId,  // ✅ เพิ่มบรรทัดนี้
+      }),
+      headers: { 'Content-Type': 'application/json' },
+    });
+
+    const data = await res.json();
+    if (data.success) {
+      clearCart();
+      navigate(`/order-success/${orderId}`); // ใช้ orderId ไปหน้าสำเร็จ
+    } else {
+      setErr('การชำระเงินไม่สำเร็จ กรุณาลองใหม่');
+    }
+  } else {
+    // กรณีที่ไม่ใช่การชำระเงินด้วยบัตร
+    const res = await fetch(`${API_BASE}/api/payment`, {
+      method: 'POST',
+      body: JSON.stringify({
+        amount: total,
+        orderId,  // ✅ เพิ่มบรรทัดนี้
+      }),
+      headers: { 'Content-Type': 'application/json' },
+    });
+
+    const data = await res.json();
+    if (data.success) {
+      clearCart();
+      navigate(`/order-success/${orderId}`); // ใช้ orderId ไปหน้าสำเร็จ
+    } else {
+      setErr('การชำระเงินไม่สำเร็จ กรุณาลองใหม่');
+    }
+  }
+};
 
   const [shippingMethod, setShippingMethod] = useState('standard'); // standard | express
   const [paymentMethod, setPaymentMethod] = useState('cod');        // cod | transfer
@@ -183,109 +244,132 @@ export default function CheckoutPage() {
     if (!/^\d{5}$/.test(String(form.postcode))) return 'รหัสไปรษณีย์ต้องเป็นตัวเลข 5 หลัก';
     if (!/^\d{10}$/.test(String(form.phone))) return 'กรุณากรอกเบอร์โทรเป็นตัวเลข 10 หลัก';
     if (paymentMethod === 'transfer' && !slipFile) return 'กรุณาแนบรูปสลิปโอนเงิน';
+    if (paymentMethod === 'card' && (!stripe || !elements)) return 'ระบบชำระเงินด้วยบัตรยังไม่พร้อมใช้งาน';
     return null;
   }
-
   async function placeOrder() {
-    const msg = validate();
-    if (msg) return setErr(msg);
+  const msg = validate();
+  if (msg) return setErr(msg);
 
-    setErr(null);
-    setSubmitting(true);
-    try {
-      // เตรียม items
-      const items = (cart || []).map((it) => {
-        const prettySize =
-          it.size
-            ? it.size
-            : (it.measures ? `อก ${it.measures.chest_in ?? it.measures.chest_cm}″ / ยาว ${it.measures.length_in ?? it.measures.length_cm}″` : null);
-        return {
-          id: it.id,
-          name: it.name,
-          price: Number(it.price) || 0,
-          qty: it.qty || 1,
-          image: it.image || null,
-          category: it.category || null,
-          size: prettySize,
-          variantKey: it.variantKey ?? null,
-          measures: it.measures ?? null,
-        };
-      });
+  // เพิ่มการตรวจสอบก่อนการยืนยันคำสั่งซื้อ
+  if (paymentMethod === 'card') {
+    if (!stripe || !elements) {
+      setErr('กรุณากรอกข้อมูลบัตรเครดิต');
+      return;
+    }
+    const card = elements.getElement(CardElement);
 
-      const payload = {
-        userId: user?.id || user?.user_id || null,
-        email: user?.email || null,
-        items,
-        amounts: { subtotal, shipping, total, totalQty },
-        shippingMethod,
-        paymentMethod,
-        address: { ...form },
-        note: form.note || '',
-      };
-
-      // 1) สร้างคำสั่งซื้อ
-      const res = await fetch(`${API_BASE}/api/orders`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload),
-      });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(data?.message || 'สร้างคำสั่งซื้อไม่สำเร็จ');
-      const orderId = data?.orderId || data?.id;
-
-      // 2) โอน → อัปโหลดสลิป
-      if (paymentMethod === 'transfer' && orderId) {
-        const fd = new FormData();
-        fd.append('file', slipFile);
-        if (slipAmount) fd.append('amount', slipAmount);
-        const up = await fetch(`${API_BASE}/api/orders/${orderId}/upload-slip`, { method: 'POST', body: fd });
-        const upData = await up.json().catch(() => ({}));
-        if (!up.ok) throw new Error(upData?.message || 'อัปโหลดสลิปไม่สำเร็จ');
-      }
-
-      // 3) อัปเดตโปรไฟล์ (ถ้าติ๊กบันทึก) — ส่งแยกช่องไปด้วย
-      if (saveToProfile && user?.email) {
-        try {
-          await fetch(`${API_BASE}/api/profile`, {
-            method: 'PUT',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              email: user.email,
-              username: form.fullName,
-              phone: form.phone,
-              address: form.addressLine,        // เก็บเฉพาะบ้านเลขที่/ถนน
-              province: form.province,
-              district: form.district,
-              subdistrict: form.subdistrict,
-              zipcode: form.postcode,
-              profile_image:
-                profile?.profile_image ||
-                user?.profile_image ||
-                user?.profile_image_url ||
-                user?.image || '',
-            }),
-          });
-        } catch {}
-      }
-
-      // 4) เก็บสรุป & ไปหน้าสำเร็จ
-      const summary = {
-        orderId,
-        items,
-        amounts: { subtotal, shipping, total, totalQty },
-        shippingMethod,
-        paymentMethod,
-        address: { ...form },
-      };
-      try { sessionStorage.setItem('lastOrderSummary', JSON.stringify(summary)); } catch {}
-      clearCart();
-      navigate(orderId ? `/order-success/${orderId}` : `/order-success`, { replace: true, state: { summary } });
-    } catch (e) {
-      setErr(e.message || 'เกิดข้อผิดพลาด');
-    } finally {
-      setSubmitting(false);
+    // ตรวจสอบว่าได้กรอกข้อมูลบัตรเครดิตหรือไม่
+    const { token, error } = await stripe.createToken(card);
+    if (error) {
+      setErr(error.message);
+      return;
+    }
+    if (!token) {
+      setErr('กรุณากรอกข้อมูลบัตรเครดิตให้ครบ');
+      return;
     }
   }
+
+  setErr(null);
+  setSubmitting(true);
+
+  try {
+    // เตรียมข้อมูลสำหรับการสั่งซื้อ
+    const items = (cart || []).map((it) => {
+      const prettySize =
+        it.size
+          ? it.size
+          : (it.measures ? `อก ${it.measures.chest_in ?? it.measures.chest_cm}″ / ยาว ${it.measures.length_in ?? it.measures.length_cm}″` : null);
+      return {
+        id: it.id,
+        name: it.name,
+        price: Number(it.price) || 0,
+        qty: it.qty || 1,
+        image: it.image || null,
+        category: it.category || null,
+        size: prettySize,
+        variantKey: it.variantKey ?? null,
+        measures: it.measures ?? null,
+      };
+    });
+
+    const payload = {
+      userId: user?.id || user?.user_id || null,
+      email: user?.email || null,
+      items,
+      amounts: { subtotal, shipping, total, totalQty },
+      shippingMethod,
+      paymentMethod,
+      address: { ...form },
+      note: form.note || '',
+    };
+
+    // สร้างคำสั่งซื้อ
+    const res = await fetch(`${API_BASE}/api/orders`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data?.message || 'สร้างคำสั่งซื้อไม่สำเร็จ');
+    const orderId = data?.orderId || data?.id;
+
+    // ชำระเงิน (ถ้าชำระด้วยบัตรเครดิต)
+    if (paymentMethod === 'card') {
+      await handlePaymentSubmit(orderId); // รับ orderId เพื่อส่งไปที่ฟังก์ชัน
+    }
+
+    // โอน → อัปโหลดสลิป
+    if (paymentMethod === 'transfer' && orderId) {
+      const fd = new FormData();
+      fd.append('file', slipFile);
+      if (slipAmount) fd.append('amount', slipAmount);
+      const up = await fetch(`${API_BASE}/api/orders/${orderId}/upload-slip`, { method: 'POST', body: fd });
+      const upData = await up.json().catch(() => ({}));
+      if (!up.ok) throw new Error(upData?.message || 'อัปโหลดสลิปไม่สำเร็จ');
+    }
+
+    // อัปเดตโปรไฟล์ (ถ้าติ๊กบันทึก)
+    if (saveToProfile && user?.email) {
+      try {
+        await fetch(`${API_BASE}/api/profile`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            email: user.email,
+            username: form.fullName,
+            phone: form.phone,
+            address: form.addressLine,
+            province: form.province,
+            district: form.district,
+            subdistrict: form.subdistrict,
+            zipcode: form.postcode,
+            profile_image: profile?.profile_image || user?.profile_image || user?.profile_image_url || user?.image || '',
+          }),
+        });
+      } catch {}
+    }
+
+    // เก็บสรุป & ไปหน้าสำเร็จ
+    const summary = {
+      orderId,
+      items,
+      amounts: { subtotal, shipping, total, totalQty },
+      shippingMethod,
+      paymentMethod,
+      address: { ...form },
+    };
+    try { sessionStorage.setItem('lastOrderSummary', JSON.stringify(summary)); } catch {}
+    clearCart();
+    navigate(orderId ? `/order-success/${orderId}` : `/order-success`, { replace: true, state: { summary } });
+  } catch (e) {
+    setErr(e.message || 'เกิดข้อผิดพลาด');
+  } finally {
+    setSubmitting(false);
+  }
+}
 
   if (isEmpty) {
     return (
@@ -297,10 +381,10 @@ export default function CheckoutPage() {
   }
 
   return (
-    <div className="max-w-6xl mx-auto p-6">
-      <h1 className="text-2xl md:text-3xl font-extrabold tracking-tight mb-6">ชำระเงิน (Checkout)</h1>
+  <div className="max-w-6xl mx-auto p-6">
+    <h1 className="text-2xl md:text-3xl font-extrabold tracking-tight mb-6">ชำระเงิน (Checkout)</h1>
 
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+    <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         {/* ซ้าย: ฟอร์มข้อมูลผู้รับ */}
         <div className="lg:col-span-2 space-y-6">
           {err && (
@@ -537,6 +621,16 @@ export default function CheckoutPage() {
                 />
                 <span>โอนผ่านธนาคาร / พร้อมเพย์</span>
               </label>
+            <label className="flex items-center gap-3">
+  <input
+    type="radio"
+    name="pay"
+    value="card"
+    checked={paymentMethod === 'card'}
+    onChange={() => setPaymentMethod('card')}
+  />
+  <span>ชำระเงินด้วยบัตรเครดิต / บัตรเดบิต</span>
+</label>
             </div>
 
             {paymentMethod === 'transfer' && (
@@ -576,6 +670,8 @@ export default function CheckoutPage() {
                     className="w-full rounded-xl border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-900 px-3 py-2"
                   />
                 </div>
+                
+
 
                 <p className="text-xs text-neutral-500">
                   หลังส่งคำสั่งซื้อ สลิปจะถูกอัปโหลดให้อัตโนมัติและรอแอดมินตรวจสอบ
@@ -583,8 +679,23 @@ export default function CheckoutPage() {
               </div>
             )}
           </section>
+          
+{paymentMethod === 'card' && (
+  <section className="bg-white dark:bg-neutral-900 rounded-2xl shadow-sm border border-neutral-200/70 dark:border-neutral-800 p-5">
+    <h2 className="text-lg font-bold mb-4">ข้อมูลบัตรเครดิต</h2>
+    <form onSubmit={handlePaymentSubmit}>
+      <label htmlFor="card-element" className="block text-sm mb-2">กรอกข้อมูลบัตรเครดิต</label>
+      <div className="border rounded-lg p-3 mb-3">
+        <CardElement id="card-element" options={{ style: { base: { fontSize: '16px' } } }} />
+      </div>
+      
+    </form>
+  </section>
+)}
         </div>
 
+  
+ 
         {/* ขวา: สรุปคำสั่งซื้อ */}
         <aside className="lg:col-span-1">
           <div className="lg:sticky lg:top-6 bg-white dark:bg-neutral-900 rounded-2xl shadow-sm border border-neutral-200/70 dark:border-neutral-800 p-5">

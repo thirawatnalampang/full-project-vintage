@@ -9,7 +9,7 @@ const fs = require('fs');
 const cors = require('cors');
 const nodemailer = require('nodemailer');
 const bcrypt = require('bcrypt');
-
+const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
 const app = express();
 const { requireAuth, requireAdmin } = require('./auth');
 
@@ -365,18 +365,6 @@ app.post('/api/register', async (req, res) => {
     return res.status(500).json({ message: 'เกิดข้อผิดพลาดในระบบ' });
   }
 });
-// ==================== นับจำนวนผู้ใช้ ====================
-app.get('/api/users/count', async (req, res) => {
-  try {
-    const countResult = await pool.query('SELECT COUNT(*) FROM users');
-    const count = parseInt(countResult.rows[0].count, 10);
-    res.json({ count });
-  } catch (err) {
-    console.error('Error in counting users:', err);
-    res.status(500).json({ message: 'เกิดข้อผิดพลาดในการนับผู้ใช้' });
-  }
-});
-
 // เก็บ user ล่าสุดที่ login
 let lastLoggedInUser = null;
 
@@ -441,10 +429,6 @@ app.post('/api/login', async (req, res) => {
   }
 });
 
-app.get('/api/last-logged-in-user', (req, res) => {
-  if (!lastLoggedInUser) return res.json({ message: 'ไม่มีผู้ใช้ล็อกอินล่าสุด' });
-  res.json({ lastLoggedInUser });
-});
 
 app.get('/api/profile', async (req, res) => {
   const email = req.query.email;
@@ -1261,21 +1245,30 @@ app.post('/api/orders', async (req, res) => {
       else shipping = (subtotal === 0 || subtotal >= SHIPPING_THRESHOLD) ? 0 : SHIPPING_FEE_STANDARD;
 
       const total = subtotal + shipping;
-      const paymentStatus = (paymentMethod === 'cod') ? 'unpaid' : 'submitted';
-
-     // บันทึก orders
+      let paymentStatus;
+if (paymentMethod === 'cod') paymentStatus = 'unpaid';
+else if (paymentMethod === 'card') paymentStatus = 'paid'; // ✅ Stripe ชำระสำเร็จทันที
+else paymentStatus = 'submitted'; // สำหรับโอน/ส่งสลิป
+// บันทึก orders
 const orderCode = genOrderCode();
+let paidAt = null;  // กำหนดค่าเริ่มต้นของ paid_at เป็น null
+
+// ถ้า paymentStatus เป็น 'paid' (เช่น ผ่านบัตร), ตั้งค่า paid_at เป็นเวลาปัจจุบัน
+if (paymentStatus === 'paid') {
+  paidAt = new Date().toISOString(); // บันทึกเวลาเป็น ISO string (หรือใช้ NOW() ใน SQL)
+}
+
 const ordRes = await client.query(
   `INSERT INTO orders
      (order_code, user_id, email, full_name, phone, address_line,
       district, province, postcode, subdistrict,
-      shipping_method, payment_method, payment_status,
+      shipping_method, payment_method, payment_status, paid_at,  
       subtotal, shipping, total_price, total_qty, note, status, created_at)
    VALUES
      ($1,$2,$3,$4,$5,$6,
       $7,$8,$9,$10,
-      $11,$12,$13,
-      $14,$15,$16,$17,$18,'pending', NOW())
+      $11,$12,$13,$14,  
+      $15,$16,$17,$18,$19,'pending', NOW())
    RETURNING id, order_code`,
   [
     orderCode,
@@ -1288,11 +1281,10 @@ const ordRes = await client.query(
     address.province ?? null,
     address.postcode ?? null,
     address.subdistrict ?? null,       // << ใส่ค่าตำบลตรงนี้
-
     shippingMethod,
     paymentMethod,
     paymentStatus,
-
+    paidAt,  // ใส่ค่าของ paid_at ที่ได้จากเงื่อนไข
     subtotal,
     shipping,
     total,
@@ -2302,67 +2294,8 @@ app.get("/api/admin/users", async (req, res) => {
   }
 });
 
-// GET: ผู้ใช้ตาม id
-app.get("/api/admin/users/:id", async (req, res) => {
-  try {
-    const q = `
-      SELECT id, username, email, role, phone, address, profile_image, email_verified, created_at
-      FROM users WHERE id = $1
-    `;
-    const result = await pool.query(q, [req.params.id]);
-    if (result.rows.length === 0) return res.status(404).json({ message: "User not found" });
-    res.json(result.rows[0]);
-  } catch (err) {
-    console.error("GET /users/:id error:", err);
-    res.status(500).json({ message: "Server error" });
-  }
-});
 
-// POST: สร้างผู้ใช้ใหม่
-app.post("/api/admin/users", async (req, res) => {
-  try {
-    const { username, password, email, role, phone, address } = req.body;
-    if (!username || !password || !email) {
-      return res.status(400).json({ message: "username, password, email required" });
-    }
 
-    const q = `
-      INSERT INTO users (username, password, email, role, phone, address, created_at, email_verified)
-      VALUES ($1, $2, $3, $4, $5, $6, NOW(), false)
-      RETURNING id, username, email, role, phone, address, created_at, email_verified
-    `;
-    const result = await pool.query(q, [username, password, email, role || "user", phone, address]);
-    res.status(201).json(result.rows[0]);
-  } catch (err) {
-    console.error("POST /users error:", err);
-    res.status(500).json({ message: "Server error" });
-  }
-});
-
-// PUT: อัปเดตผู้ใช้
-app.put("/api/admin/users/:id", async (req, res) => {
-  try {
-    const { username, email, role, phone, address, profile_image, email_verified } = req.body;
-    const q = `
-      UPDATE users
-      SET username = COALESCE($1, username),
-          email = COALESCE($2, email),
-          role = COALESCE($3, role),
-          phone = COALESCE($4, phone),
-          address = COALESCE($5, address),
-          profile_image = COALESCE($6, profile_image),
-          email_verified = COALESCE($7, email_verified)
-      WHERE id = $8
-      RETURNING id, username, email, role, phone, address, profile_image, email_verified, created_at
-    `;
-    const result = await pool.query(q, [username, email, role, phone, address, profile_image, email_verified, req.params.id]);
-    if (result.rows.length === 0) return res.status(404).json({ message: "User not found" });
-    res.json(result.rows[0]);
-  } catch (err) {
-    console.error("PUT /users/:id error:", err);
-    res.status(500).json({ message: "Server error" });
-  }
-});
 
 // DELETE: ลบผู้ใช้
 app.delete("/api/admin/users/:id", async (req, res) => {
@@ -2377,6 +2310,42 @@ app.delete("/api/admin/users/:id", async (req, res) => {
   }
 });
 
+app.post('/api/payment', async (req, res) => {
+  const client = await pool.connect();
+  try {
+    const { token, amount, orderId } = req.body;
+
+    if (!orderId) return res.status(400).json({ success: false, message: "Missing orderId" });
+
+    // ✅ สร้าง Charge ผ่าน Stripe
+    const charge = await stripe.charges.create({
+      amount: Math.round(amount * 100), // จำนวนเงิน (หน่วย: สตางค์)
+      currency: 'thb',
+      description: `Payment for order #${orderId}`,
+      source: token, // Token จากข้อมูลบัตร
+    });
+
+    // ✅ อัปเดตสถานะในฐานข้อมูล
+    await client.query(
+      `UPDATE orders 
+       SET payment_status = 'paid',
+           payment_method = 'card',
+           stripe_charge_id = $2,
+           updated_at = NOW()
+       WHERE id = $1`,
+      [orderId, charge.id]
+    );
+
+    await client.query('COMMIT');
+    res.json({ success: true, message: "Payment completed", charge_id: charge.id });
+  } catch (error) {
+    await client.query('ROLLBACK');
+    console.error("❌ Stripe charge failed:", error);
+    res.status(500).json({ success: false, message: error.message });
+  } finally {
+    client.release();
+  }
+});
 
 app.listen(PORT, () => {
   console.log(`✅ Server running at http://localhost:${PORT}`);

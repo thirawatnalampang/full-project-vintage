@@ -519,23 +519,23 @@ export default function OrderDetailPage() {
     </span>
   </span>
 )}
-    {/* 4️⃣ การชำระเงิน */}
-    <span
-      className={cx(
-        "px-2 py-0.5 text-xs rounded-full border inline-flex items-center gap-1 shrink-0",
-        payPillColor(od.payment_status)
-      )}
-    >
-      {od.payment_status === "paid" ? (
-        <FiCheckCircle />
-      ) : od.payment_status === "rejected" ? (
-        <FiX />
-      ) : (
-        <FiClock />
-      )}
-      {(od.payment_method === "cod" ? "ปลายทาง" : "โอน")} •{" "}
-      {PAYMENT_TH[od.payment_status] || "ยังไม่ชำระ"}
-    </span>
+    {/* การชำระเงิน */}
+<span
+  className={cx(
+    "px-2 py-0.5 text-xs rounded-full border inline-flex items-center gap-1 shrink-0",
+    payPillColor(od.payment_status)
+  )}
+>
+  {od.payment_status === "paid" ? (
+    <FiCheckCircle />
+  ) : od.payment_status === "rejected" ? (
+    <FiX />
+  ) : (
+    <FiClock />
+  )}
+  {(od.payment_method === "card" ? "บัตรเครดิต" : od.payment_method === "cod" ? "ปลายทาง" : "โอน")} •{" "}
+  {PAYMENT_TH[od.payment_status] || "ยังไม่ชำระ"}
+</span>
 
     {/* 5️⃣ วิธีจัดส่ง */}
     {shipLabel && (

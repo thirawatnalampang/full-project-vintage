@@ -318,7 +318,7 @@ function extractShipping(o = {}) {
 
 /* ===== Badges ===== */
 function PaymentBadge({ method, status }) {
-  const methodTH = method === "cod" ? "ปลายทาง" : "โอน";
+  const methodTH = method === "card" ? "บัตรเครดิต" : method === "cod" ? "ปลายทาง" : "โอน";
   const statusTH = PAYMENT_TH[status] || PAYMENT_TH.unpaid;
   const color = payPillColor(status || "unpaid");
   return (

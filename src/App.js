@@ -1,4 +1,3 @@
-// src/App.jsx
 import React, { useState } from 'react';
 import { Routes, Route, useLocation } from 'react-router-dom';
 import Header from './components/Navbar';
@@ -16,7 +15,13 @@ import MyOrders from './pages/MyOrders';
 import SearchPage from './pages/SearchPage';
 import OrderDetailPage from "./pages/OrderDetailPage";
 
+import { Elements } from '@stripe/react-stripe-js'; // นำเข้า Elements จาก Stripe
+import { loadStripe } from '@stripe/stripe-js'; // นำเข้า loadStripe เพื่อโหลด Stripe public key
+
 import './App.css';
+
+// โหลด Stripe public key
+const stripePromise = loadStripe('pk_test_51SMWFtQ4iQWPIx2WgiD3sfUtXHqFGPnjyQ9mGvLgh4c9FLg18uDHMQUwlVpexZGW5uCZ4gH7bfVbTzGWGfFfN85U002s6nKtMl');
 
 function App() {
   const [cart, setCart] = useState([]);
@@ -30,22 +35,25 @@ function App() {
         <Header />
       </div>
 
-      <Routes>
-        <Route path="/" element={<Home cart={cart} setCart={setCart} />} />
-        <Route path="/category/:categoryName" element={<Category cart={cart} setCart={setCart} />} />
-        <Route path="/product/:productId" element={<ProductDetail />} />
-        <Route path="/cart" element={<Cart cart={cart} />} />
-        <Route path="/login" element={<LoginForm />} />
-        <Route path="/register" element={<RegisterForm />} />
-        <Route path="/profile" element={<ProfilePage />} />
-        <Route path="/admin" element={<AdminPage />} />
-        <Route path="/checkout" element={<CheckoutPage />} />
-        <Route path="/order-success" element={<OrderSuccess />} />
-        <Route path="/order-success/:orderId" element={<OrderSuccess />} />
-        <Route path="/orders" element={<MyOrders />} />
-        <Route path="/search" element={<SearchPage />} />
-        <Route path="/orders/:orderId" element={<OrderDetailPage />} />
-      </Routes>
+      {/* ห่อหุ้ม CheckoutPage ด้วย Elements */}
+      <Elements stripe={stripePromise}>
+        <Routes>
+          <Route path="/" element={<Home cart={cart} setCart={setCart} />} />
+          <Route path="/category/:categoryName" element={<Category cart={cart} setCart={setCart} />} />
+          <Route path="/product/:productId" element={<ProductDetail />} />
+          <Route path="/cart" element={<Cart cart={cart} />} />
+          <Route path="/login" element={<LoginForm />} />
+          <Route path="/register" element={<RegisterForm />} />
+          <Route path="/profile" element={<ProfilePage />} />
+          <Route path="/admin" element={<AdminPage />} />
+          <Route path="/checkout" element={<CheckoutPage />} />
+          <Route path="/order-success" element={<OrderSuccess />} />
+          <Route path="/order-success/:orderId" element={<OrderSuccess />} />
+          <Route path="/orders" element={<MyOrders />} />
+          <Route path="/search" element={<SearchPage />} />
+          <Route path="/orders/:orderId" element={<OrderDetailPage />} />
+        </Routes>
+      </Elements>
     </>
   );
 }

@@ -57,34 +57,33 @@ export default function Home() {
       </div>
 
       {/* Footer */}
-      <footer className="bg-[#6b3e26] text-white py-10 text-sm">
-        <div className="max-w-6xl mx-auto px-4 grid grid-cols-2 md:grid-cols-4 gap-4">
-          <div>
-            <h4 className="font-bold mb-2">KP VINTAGE</h4>
-            <p>เสื้อผ้าวินเทจแท้ คัดพิเศษทุกตัว</p>
-          </div>
-          <div>
-            <h4 className="font-bold mb-2">เมนู</h4>
-            <p>ติดต่อเรา</p>
-          </div>
-          <div>
-            <h4 className="font-bold mb-2">ติดตามเรา</h4>
-<a
-  href="https://www.instagram.com/kp_vintage90store/"
-  target="_blank"
-  rel="noopener noreferrer"
-  className="text-blue-500 hover:underline"
->
-  Instagram
-</a>
-          </div>
-          <div>
-            <h4 className="font-bold mb-2">ติดต่อ</h4>
-            <p>โทร: 090-840-5158</p>
-            <p>LINE: @kpvintage</p>
-          </div>
-        </div>
-      </footer>
+ <footer className="bg-[#6b3e26] text-white py-10 text-sm pb-24 sm:pb-10">
+  <div className="max-w-6xl mx-auto px-6 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-10">
+    <div>
+      <h4 className="font-bold mb-3 text-lg">KP VINTAGE</h4>
+      <p>เสื้อผ้าวินเทจแท้ คัดพิเศษทุกตัว</p>
+    </div>
+
+    <div>
+      <h4 className="font-bold mb-3 text-lg">instagram</h4>
+      <a
+        href="https://www.instagram.com/kp_vintage90store/"
+        target="_blank"
+        rel="noopener noreferrer"
+        className="text-blue-400 hover:underline"
+      >
+        Instagram
+      </a>
+    </div>
+
+    <div>
+      <h4 className="font-bold mb-3 text-lg">ติดต่อ</h4>
+      <p>โทร: 098-840-5158</p>
+      <p>instagram: @kp_vintage90store</p>
+    </div>
+  </div>
+</footer>
+
     </div>
   );
 }

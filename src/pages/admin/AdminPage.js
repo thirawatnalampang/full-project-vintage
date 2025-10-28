@@ -770,10 +770,7 @@ formData.append(
                   </button>
                 </div>
 
-                <p className="text-xs text-neutral-500 mt-2">
-                  * ค่าที่กรอกจะถูกส่งเป็น <code>measureVariants</code> เช่น{" "}
-                  <code>[&#123; chest_cm:40, length_cm:27, stock:3 &#125;]</code>
-                </p>
+               
               </div>
 
               <div className="flex items-center justify-end gap-2 pt-2">
@@ -807,6 +804,8 @@ const PAY_LABELS = {
   submitted: "ส่งสลิปแล้ว",
   paid: "ชำระแล้ว",
   rejected: "สลิปถูกปฏิเสธ",
+  card: "ชำระด้วยบัตรเครดิต", // เพิ่มคำนี้
+  
 }; 
 // 1) แปลบทบาทเป็นไทย
 const ROLE_TH = {
@@ -1027,6 +1026,7 @@ const PAY_LABELS = {
   submitted: "ส่งสลิปแล้ว",
   paid: "ชำระแล้ว",
   rejected: "สลิปถูกปฏิเสธ",
+  card: "ชำระด้วยบัตรเครดิต", // เพิ่มคำนี้
 };
 
 
@@ -1034,6 +1034,7 @@ const PAY_LABELS = {
   const PAYMENT_METHOD_TH = {
     cod: "เก็บเงินปลายทาง",
     transfer: "โอนเงิน/สลิป",
+    card: "ชำระด้วยบัตรเครดิต", // เพิ่มคำนี้
   };
 
   const statusClass = (s) => {
@@ -1143,30 +1144,13 @@ const PAY_LABELS = {
 async function saveStatus() {
   const oid = detail?.order?.id;
   if (!oid) return;
-
-  // ถ้าเลือกว่า "ยกเลิก" → ใช้ /cancel (จะถามคืนสต๊อกและทำคืนสต๊อกให้)
-  if (statusDraft === 'cancelled') {
-    const restock = window.confirm('ต้องการคืนสต็อกสินค้าด้วยหรือไม่? กด OK = คืนสต็อก, Cancel = ไม่คืน');
-
-    try {
-      const res = await authFetch(`${API_ORDERS}/${oid}/cancel`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ restock }),
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data?.message || "ยกเลิกออเดอร์ไม่สำเร็จ");
-
-      // อัปเดต state ให้ UI สอดคล้อง
-      setOrders(os => os.map(o => o.id === oid ? { ...o, status: data.status } : o));
-      setDetail(d => d ? { ...d, order: { ...d.order, status: data.status } } : d);
-
-      alert("ยกเลิกออเดอร์เรียบร้อย" + (restock ? " (คืนสต๊อกแล้ว)" : ""));
-    } catch (e) {
-      alert(e.message);
-    }
-    return; // จบ ไม่ต้องยิง /status ต่อ
+if (statusDraft === "cancelled") {
+  if (detail?.order) {
+    setCancelTarget(detail.order);
+    setCancelOpen(true);
   }
+  return;
+}
 
   // กรณีสถานะอื่น ๆ ใช้ /status ตามเดิม
   setSavingStatus(true);
@@ -1431,32 +1415,43 @@ async function saveStatus() {
               </td>
 
               {/* การชำระเงิน */}
-              <td className="px-4 py-3 whitespace-nowrap">
-                <span className={chip(payClass(o.payment_status))}>
-                  {PAY_LABELS[o.payment_status || "unpaid"]}
-                </span>
+             <td className="px-4 py-3 whitespace-nowrap">
+  {/* 🔹 กรณีบัตรเครดิต */}
+  {o.payment_method === "card" ? (
+    <span className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-semibold bg-emerald-600 text-black">
+      ชำระเงินแล้ว (Stripe)
+    </span>
+  ) : (
+    <>
+      <span className={chip(payClass(o.payment_status))}>
+        {PAY_LABELS[o.payment_status || "unpaid"]}
+      </span>
 
-                {o.payment_method && (
-                  <span className="ml-2 text-xs text-neutral-400">
-                    {PAYMENT_METHOD_TH[o.payment_method] || o.payment_method}
-                  </span>
-                )}
+      {o.payment_method && (
+        <span className="ml-2 text-xs text-neutral-400">
+          {PAYMENT_METHOD_TH[o.payment_method] || o.payment_method}
+        </span>
+      )}
 
-                {o.payment_status === "submitted" && !o.slip_image && (
-                  <span className="ml-2 text-xs text-amber-400">(ไม่มีไฟล์)</span>
-                )}
+      { o.payment_status === "submitted" &&
+  !o.slip_image &&
+  o.payment_method !== "card" && (
+    <span className="ml-2 text-xs text-amber-400">(ไม่มีไฟล์)</span>
+)}
 
-                {o.slip_image && (
-                  <a
-                    href={`${API_BASE}${o.slip_image}`}
-                    target="_blank"
-                    rel="noreferrer"
-                    className="ml-2 underline text-xs text-neutral-300"
-                  >
-                    ดูสลิป
-                  </a>
-                )}
-              </td>
+      {o.slip_image && (
+        <a
+          href={`${API_BASE}${o.slip_image}`}
+          target="_blank"
+          rel="noreferrer"
+          className="ml-2 underline text-xs text-neutral-300"
+        >
+          ดูสลิป
+        </a>
+      )}
+    </>
+  )}
+</td>
 
               {/* คอลัมน์ติดตาม */}
               <td className="px-4 py-3">
@@ -1587,104 +1582,103 @@ async function saveStatus() {
                 </button>
               </div>
             </div>
-
-            {/* การชำระเงิน */}
-            <div className="mb-6">
-              <div className="flex items-center justify-between">
-                <div>
-                  <div className="text-neutral-400 text-sm">การชำระเงิน</div>
-                  <div className="mt-1">
-                    <span className={chip(payClass(detail.order.payment_status))}>
-                      {PAY_LABELS[detail.order.payment_status || "unpaid"]}
-                    </span>
-                    {detail.order.paid_at && (
-                      <span className="ml-2 text-xs text-neutral-400">
-                        ชำระเมื่อ {new Date(detail.order.paid_at).toLocaleString("th-TH")}
-                      </span>
-                    )}
-                  </div>
-                </div>
-
-                <div className="flex gap-2">
-                  {detail.order.payment_method === "transfer" ? (
-                    <>
-                      <button
-                        onClick={markPaid}
-                        disabled={paying || detail.order.payment_status === "paid"}
-                        className="px-3 py-2 rounded-xl bg-emerald-500 text-black font-medium hover:bg-emerald-400 disabled:opacity-60"
-                      >
-                        {paying ? "กำลังยืนยัน..." : "ยืนยันรับเงิน"}
-                      </button>
-                      <button
-                        onClick={rejectSlip}
-                        disabled={rejecting || detail.order.payment_status === "rejected" || !detail.order.slip_image}
-                        className="px-3 py-2 rounded-xl bg-rose-600 text-white font-medium hover:bg-rose-500 disabled:opacity-60"
-                      >
-                        {rejecting ? "กำลังปฏิเสธ..." : "ปฏิเสธสลิป"}
-                      </button>
-                    </>
-                  ) : (
-                    <span className="text-xs text-neutral-400 self-center">
-                      วิธีชำระ: เก็บเงินปลายทาง (ไม่ต้องยืนยันสลิป)
-                    </span>
-                  )}
-
-{detail.order.status === "cancelled" && (
-  <div className="mb-6 rounded-xl border border-rose-700 bg-rose-950/40 p-4 text-rose-200">
-    <div className="text-sm font-semibold">เหตุผลการยกเลิก</div>
-    <div className="mt-1 text-sm whitespace-pre-wrap">
-      {detail.order.cancel_reason || "—"}
+{/* การชำระเงิน */}
+<div className="mb-6">
+  <div className="flex items-center justify-between">
+    <div>
+      <div className="text-neutral-400 text-sm">การชำระเงิน</div>
+      <div className="mt-1">
+        <span className={chip(payClass(detail.order.payment_status))}>
+          {PAY_LABELS[detail.order.payment_method || "unpaid"]} {/* ใช้ payment_method แทน payment_status */}
+        </span>
+        {detail.order.paid_at && (
+          <span className="ml-2 text-xs text-neutral-400">
+            ชำระเมื่อ {new Date(detail.order.paid_at).toLocaleString("th-TH")}
+          </span>
+        )}
+      </div>
     </div>
 
-    <div className="mt-1 text-xs text-rose-300/80">
-      โดย: {ROLE_TH[detail.order.cancelled_by] || "ไม่ระบุ"}
-      {detail.order.cancelled_at && (
+    <div className="flex gap-2">
+      {detail.order.payment_method === "transfer" ? (
         <>
-          {" "}
-          • เมื่อ{" "}
-          {new Date(detail.order.cancelled_at).toLocaleString("th-TH", {
-            dateStyle: "medium",
-            timeStyle: "medium",
-          })}
+          <button
+            onClick={markPaid}
+            disabled={paying || detail.order.payment_status === "paid"}
+            className="px-3 py-2 rounded-xl bg-emerald-500 text-black font-medium hover:bg-emerald-400 disabled:opacity-60"
+          >
+            {paying ? "กำลังยืนยัน..." : "ยืนยันรับเงิน"}
+          </button>
+          <button
+            onClick={rejectSlip}
+            disabled={rejecting || detail.order.payment_status === "rejected" || !detail.order.slip_image}
+            className="px-3 py-2 rounded-xl bg-rose-600 text-white font-medium hover:bg-rose-500 disabled:opacity-60"
+          >
+            {rejecting ? "กำลังปฏิเสธ..." : "ปฏิเสธสลิป"}
+          </button>
         </>
+      ) : (
+        <span className="text-xs text-neutral-400 self-center">
+          วิธีชำระ: {PAYMENT_METHOD_TH[detail.order.payment_method] || detail.order.payment_method}
+        </span>
+      )}
+
+      {detail.order.status === "cancelled" && (
+        <div className="mb-6 rounded-xl border border-rose-700 bg-rose-950/40 p-4 text-rose-200">
+          <div className="text-sm font-semibold">เหตุผลการยกเลิก</div>
+          <div className="mt-1 text-sm whitespace-pre-wrap">
+            {detail.order.cancel_reason || "—"}
+          </div>
+
+          <div className="mt-1 text-xs text-rose-300/80">
+            โดย: {ROLE_TH[detail.order.cancelled_by] || "ไม่ระบุ"}
+            {detail.order.cancelled_at && (
+              <>
+                {" "}
+                • เมื่อ{" "}
+                {new Date(detail.order.cancelled_at).toLocaleString("th-TH", {
+                  dateStyle: "medium",
+                  timeStyle: "medium",
+                })}
+              </>
+            )}
+          </div>
+        </div>
+      )}
+
+      <button
+        onClick={openCancelModal}
+        disabled={['cancelled', 'done', 'shipped'].includes(detail.order.status)}
+        className="px-3 py-2 rounded-xl bg-neutral-700 text-white font-medium hover:bg-neutral-600 disabled:opacity-60"
+      >
+        ยกเลิกออเดอร์
+      </button>
+    </div>
+  </div>
+
+  {detail.order.slip_image && (
+    <div className="mt-3">
+      <a
+        href={`${API_BASE}${detail.order.slip_image}`}
+        target="_blank"
+        rel="noreferrer"
+        className="inline-block"
+      >
+        <img
+          src={`${API_BASE}${detail.order.slip_image}`}
+          alt="slip"
+          className="w-56 rounded-xl border border-neutral-800"
+        />
+      </a>
+      {detail.order.payment_amount != null && (
+        <div className="mt-2 text-sm text-neutral-300">
+          ยอดที่แจ้งโอน: <span className="font-medium">{CURRENCY(detail.order.payment_amount)}</span>
+        </div>
       )}
     </div>
-  </div>
-)}
-
-                  <button
-  onClick={openCancelModal}
-  disabled={['cancelled','done','shipped'].includes(detail.order.status)}
-  className="px-3 py-2 rounded-xl bg-neutral-700 text-white font-medium hover:bg-neutral-600 disabled:opacity-60"
->
-  ยกเลิกออเดอร์
-</button>
-                </div>
-              </div>
-
-              {detail.order.slip_image && (
-  <div className="mt-3">
-    <a
-      href={`${API_BASE}${detail.order.slip_image}`}
-      target="_blank"
-      rel="noreferrer"
-      className="inline-block"
-    >
-      <img
-        src={`${API_BASE}${detail.order.slip_image}`}
-        alt="slip"
-        className="w-56 rounded-xl border border-neutral-800"
-      />
-    </a>
-    {detail.order.payment_amount != null && (
-      <div className="mt-2 text-sm text-neutral-300">
-        ยอดที่แจ้งโอน: <span className="font-medium">{CURRENCY(detail.order.payment_amount)}</span>
-      </div>
-    )}
-  </div>
-)}
-
-            </div>
+  )}
+</div>
+         
 
             {/* ที่อยู่/การจัดส่ง */}
             <div className="grid sm:grid-cols-2 gap-4 mb-6">

@@ -100,7 +100,7 @@ export default function RegisterPage() {
       {/* ฟอร์มด้านขวา */}
       <div className="flex items-center justify-center px-6 py-12">
         <div className="w-full max-w-md bg-white rounded-2xl shadow-xl p-8">
-          <h2 className="text-3xl font-bold text-center text-gray-800 mb-6">REGISTER</h2>
+          <h2 className="text-3xl font-bold text-center text-gray-800 mb-6">สมัครสมาชิก</h2>
 
           <form onSubmit={handleSubmit} className="space-y-5">
             {/* Email */}

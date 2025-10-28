@@ -232,8 +232,13 @@ export default function OrderSuccessPage() {
               <div className="text-sm space-y-0.5">
                 <div>
                   <span className="text-neutral-500">วิธีชำระเงิน:</span>{" "}
-                  {summary.paymentMethod === "cod" ? "เก็บเงินปลายทาง" : "โอนเงิน/สลิป"}
+                  {summary.paymentMethod === "card"
+        ? "ชำระเงินด้วยบัตรเครดิต"
+        : summary.paymentMethod === "cod"
+        ? "เก็บเงินปลายทาง"
+        : "โอนเงิน/สลิป"}
                 </div>
+                
                 <div>
                   <span className="text-neutral-500">วิธีจัดส่ง:</span>{" "}
                   {summary.shippingMethod === "express" ? "จัดส่งด่วน (Express)" : "จัดส่งธรรมดา (Standard)"}
